@@ -69,6 +69,78 @@ downstream state. Use this when you want to freeze the rollout for
 inspection. `spec.paused` is different from `progression.steps[].pause`,
 which is a normal step-level pause that the Executor honors.
 
+## Autoscaling (HPA cooperation)
+
+A HorizontalPodAutoscaler can target a Rollout directly:
+
+```yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: my-app, namespace: default}
+spec:
+  scaleTargetRef:
+    apiVersion: rollouts.io/v1alpha1
+    kind: Rollout
+    name: my-app
+  minReplicas: 4
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource: {name: cpu, target: {type: Utilization, averageUtilization: 70}}
+```
+
+The `Rollout` CRD exposes a `scale` subresource pointing at
+`spec.replicas`, so HPA updates land in the normal place.
+
+### How the split is maintained
+
+On every reconcile the controller:
+
+1. Reads `spec.replicas` as the total desired pod count.
+2. Reads `status.currentWeight` (updated by the most recent `SetWeight` or
+   `Promote` step) as the current traffic split.
+3. Computes `canary = ceil(desired × weight / 100)`, `stable = desired - canary`.
+4. Calls the forked `scaleReplicaSet` on each side to converge.
+
+If HPA increases `spec.replicas` from 10 to 14 while the rollout is mid-
+ramp at 25% canary, the next reconcile takes the canary from 3 pods to 4
+and the stable from 7 to 10, preserving the weight split without any
+human action.
+
+`status.currentWeight` and `status.desiredReplicas` are persisted between
+reconciles and are what let the controller distinguish its own step-
+driven scale changes from external scaler activity.
+
+### `spec.hpaStrategy`
+
+| Mode | Behavior |
+| ---- | -------- |
+| `Preserve` (default) | HPA controls total pods; weight-driven split is preserved. |
+| `StableOnly` | HPA scales the stable RS only; canary count is whatever `SetCanaryScale` asked for. Useful when you want an exact-replica canary regardless of autoscaling. |
+| `Disabled` | Controller ignores `spec.replicas` changes during the rollout. It still reads the initial value; subsequent HPA updates are observed but not acted on until the rollout completes. |
+
+### Known interactions
+
+**`scaleDownDelaySeconds` doubles capacity briefly.** At `Promote`, the
+controller moves traffic to 100% canary and repoints `stableServices` at
+the new RS's pod-template-hash, but the old stable RS is retained for up
+to `scaleDownDelaySeconds` (default 30s) so in-flight requests can drain.
+During that window both RSes run at their promote-time capacities. For a
+50% canary being promoted to 100%, this means `1.5 × desired` pods for
+the delay duration. Size `maxSurge` and `minReplicas` accordingly.
+
+**Promote guards against HPA races.** If HPA bumps `spec.replicas` at the
+same moment Promote is scaling down the old RS, the scale-down is
+deferred until `status.observedGeneration == metadata.generation` and
+`status.desiredReplicas == spec.replicas`. Without this guard the old RS
+could be scaled to zero while HPA was mid-way through scaling it up.
+
+**First-sync capacity.** A fresh Rollout's first reconcile creates the
+new ReplicaSet at zero replicas (not at `spec.replicas`). The second
+reconcile grows it to the weight-derived canary count. This avoids a
+momentary capacity doubling between RS creation and the split
+reconciliation.
+
 ## Rollback
 
 The `rollbackWindow` field bounds automatic rollback to the most recent N

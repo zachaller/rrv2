@@ -267,6 +267,27 @@ spec:
                   - role
                   type: object
                 type: array
+              hpaStrategy:
+                default: Preserve
+                description: |-
+                  HPAStrategy governs how the Rollout cooperates with a
+                  HorizontalPodAutoscaler whose scaleTargetRef points at this Rollout.
+
+                    Preserve   — HPA changes spec.replicas; the controller redistributes
+                                 the total across canary and stable ReplicaSets while
+                                 preserving the current traffic weight split. This is
+                                 the default.
+                    StableOnly — HPA controls the stable ReplicaSet only. The canary
+                                 count is whatever SetCanaryScale asked for; SetWeight
+                                 ramps shift traffic without moving pods.
+                    Disabled   — The controller ignores external spec.replicas changes
+                                 during a rollout. Use this when HPA and the rollout's
+                                 step sequence would conflict too badly.
+                enum:
+                - Preserve
+                - StableOnly
+                - Disabled
+                type: string
               minReadySeconds:
                 description: MinReadySeconds mirrors Deployment.Spec.MinReadySeconds.
                 format: int32
@@ -18736,6 +18757,22 @@ spec:
                 description: CurrentStepHash is a hash of the step's spec; changes
                   invalidate in-flight state.
                 type: string
+              currentWeight:
+                description: |-
+                  CurrentWeight is the percentage of traffic currently routed to the
+                  canary ReplicaSet. Updated by SetWeight and Promote steps; used as
+                  the authoritative input for HPA-aware replica splitting so changes
+                  to spec.replicas mid-rollout preserve the active split.
+                format: int32
+                type: integer
+              desiredReplicas:
+                description: |-
+                  DesiredReplicas is the total replica count the controller most
+                  recently honored. Comparing spec.replicas against this field is how
+                  the controller attributes deltas to external scalers (HPA, manual
+                  kubectl scale) versus its own step-driven scaling.
+                format: int32
+                type: integer
               message:
                 description: Message is a human-readable description of Phase.
                 type: string

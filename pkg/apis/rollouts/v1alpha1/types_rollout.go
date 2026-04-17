@@ -104,6 +104,24 @@ type RolloutSpec struct {
 	// +optional
 	DynamicStableScale DynamicStableScaleMode `json:"dynamicStableScale,omitempty"`
 
+	// HPAStrategy governs how the Rollout cooperates with a
+	// HorizontalPodAutoscaler whose scaleTargetRef points at this Rollout.
+	//
+	//   Preserve   — HPA changes spec.replicas; the controller redistributes
+	//                the total across canary and stable ReplicaSets while
+	//                preserving the current traffic weight split. This is
+	//                the default.
+	//   StableOnly — HPA controls the stable ReplicaSet only. The canary
+	//                count is whatever SetCanaryScale asked for; SetWeight
+	//                ramps shift traffic without moving pods.
+	//   Disabled   — The controller ignores external spec.replicas changes
+	//                during a rollout. Use this when HPA and the rollout's
+	//                step sequence would conflict too badly.
+	// +kubebuilder:validation:Enum=Preserve;StableOnly;Disabled
+	// +kubebuilder:default=Preserve
+	// +optional
+	HPAStrategy HPAStrategyMode `json:"hpaStrategy,omitempty"`
+
 	// Analysis hooks fire at defined points in the progression. One unified
 	// list covers pre/post-step gates, background checks, and pre/post-
 	// promotion validation — the When field distinguishes trigger points.
@@ -680,6 +698,20 @@ type RolloutStatus struct {
 	// CollisionCount avoids pod-template-hash collisions, same as Deployment.
 	// +optional
 	CollisionCount *int32 `json:"collisionCount,omitempty"`
+
+	// CurrentWeight is the percentage of traffic currently routed to the
+	// canary ReplicaSet. Updated by SetWeight and Promote steps; used as
+	// the authoritative input for HPA-aware replica splitting so changes
+	// to spec.replicas mid-rollout preserve the active split.
+	// +optional
+	CurrentWeight int32 `json:"currentWeight,omitempty"`
+
+	// DesiredReplicas is the total replica count the controller most
+	// recently honored. Comparing spec.replicas against this field is how
+	// the controller attributes deltas to external scalers (HPA, manual
+	// kubectl scale) versus its own step-driven scaling.
+	// +optional
+	DesiredReplicas int32 `json:"desiredReplicas,omitempty"`
 }
 
 // PauseCondition is a single, typed pause reason.
@@ -725,6 +757,15 @@ const (
 	DynamicStableScaleOff          DynamicStableScaleMode = "Off"
 	DynamicStableScaleProportional DynamicStableScaleMode = "Proportional"
 	DynamicStableScaleAggressive   DynamicStableScaleMode = "Aggressive"
+)
+
+// HPAStrategyMode governs cooperation with an external HorizontalPodAutoscaler.
+type HPAStrategyMode string
+
+const (
+	HPAStrategyPreserve   HPAStrategyMode = "Preserve"
+	HPAStrategyStableOnly HPAStrategyMode = "StableOnly"
+	HPAStrategyDisabled   HPAStrategyMode = "Disabled"
 )
 
 // WorkloadScaleDownMode is the workloadRef.scaleDown enum.

@@ -180,7 +180,8 @@ func (r *Reconciler) listReplicaSets(ctx context.Context, ro *rolloutsv1alpha1.R
 }
 
 // syncRollout is the per-rollout reconcile entry point. It establishes the
-// new ReplicaSet (creating it if necessary), then hands off to the progression
+// new ReplicaSet (creating it if necessary), reconciles replica counts
+// against the current traffic split, then hands off to the progression
 // Executor which interprets the current step.
 func (r *Reconciler) syncRollout(ctx context.Context, ro *rolloutsv1alpha1.Rollout, rsList []*appsv1.ReplicaSet) (time.Duration, error) {
 	if ro.Spec.Paused {
@@ -199,6 +200,14 @@ func (r *Reconciler) syncRollout(ctx context.Context, ro *rolloutsv1alpha1.Rollo
 	newRS, oldRSs, err := r.reconcileReplicaSets(ctx, ro, rsList)
 	if err != nil {
 		return 0, fmt.Errorf("reconcile replicasets: %w", err)
+	}
+
+	// Drive RS replica counts toward the (canary, stable) split implied by
+	// the current traffic weight. Runs on every reconcile so external scale
+	// changes — HPA in particular — propagate immediately, not just at step
+	// boundaries.
+	if err := r.reconcileReplicas(ctx, ro, newRS, oldRSs); err != nil {
+		return 0, fmt.Errorf("reconcile replicas: %w", err)
 	}
 
 	// Push status counters that are safe to compute without the progression's
@@ -241,8 +250,23 @@ func (r *Reconciler) syncRollout(ctx context.Context, ro *rolloutsv1alpha1.Rollo
 // is the parent — we retrofit the ownerReference after the forked helper
 // creates/updates the RS (the helper sets the owner to the synthetic
 // Deployment, which isn't the real object).
+//
+// The forked code's initial-create path would otherwise size a new RS at
+// the full spec.replicas, temporarily doubling cluster capacity while
+// reconcileReplicas brings it back to the canary split. We sidestep that
+// by handing it a zero-replicas view on first creation — reconcileReplicas
+// then grows the RS to (canary, stable) in a single step.
 func (r *Reconciler) reconcileReplicaSets(ctx context.Context, ro *rolloutsv1alpha1.Rollout, rsList []*appsv1.ReplicaSet) (newRS *appsv1.ReplicaSet, oldRSs []*appsv1.ReplicaSet, err error) {
 	d := asDeploymentView(ro, &ro.Spec)
+
+	// If no new RS exists yet and we're about to create one, clamp initial
+	// replicas to zero so the create doesn't surge cluster capacity before
+	// reconcileReplicas has a chance to split. The next reconcile will scale
+	// it to the correct target.
+	if !hasMatchingRS(ro, rsList) {
+		zero := int32(0)
+		d.Spec.Replicas = &zero
+	}
 
 	newRS, oldRSs, err = r.forked.GetAllReplicaSetsAndSyncRevision(ctx, d, rsList, true)
 	if err != nil {
@@ -257,6 +281,31 @@ func (r *Reconciler) reconcileReplicaSets(ctx context.Context, ro *rolloutsv1alp
 		}
 	}
 	return newRS, oldRSs, nil
+}
+
+// hasMatchingRS reports whether the RS list already contains one whose pod
+// template matches the rollout's current template. Used to decide whether a
+// GetAllReplicaSetsAndSyncRevision call will create a new RS or adopt an
+// existing one.
+func hasMatchingRS(ro *rolloutsv1alpha1.Rollout, rsList []*appsv1.ReplicaSet) bool {
+	// Best-effort: compare pod-template-hash labels. If the rollout has
+	// not yet stamped status.CurrentPodHash, we fall through to "treat as
+	// create" which is the safe default.
+	target := ro.Status.CurrentPodHash
+	if target == "" {
+		for _, rs := range rsList {
+			if rs.Labels["pod-template-hash"] != "" {
+				return true
+			}
+		}
+		return false
+	}
+	for _, rs := range rsList {
+		if rs.Labels["pod-template-hash"] == target {
+			return true
+		}
+	}
+	return false
 }
 
 // ensureOwnedByRollout rewrites a ReplicaSet's controller ownerReference to
@@ -281,12 +330,19 @@ func (r *Reconciler) ensureOwnedByRollout(ctx context.Context, ro *rolloutsv1alp
 
 // pushReplicaCounts computes aggregate replica counters from all RSes and
 // updates status if they changed. No phase transitions happen here.
+//
+// status.DesiredReplicas is stamped alongside so observedSpecReplicas can
+// tell whether the reconciler has caught up with an external spec.replicas
+// change (HPA, manual kubectl scale). That's what guards the
+// scaleDown-after-promote path against HPA races.
 func (r *Reconciler) pushReplicaCounts(ctx context.Context, ro *rolloutsv1alpha1.Rollout, newRS *appsv1.ReplicaSet, allRSs []*appsv1.ReplicaSet) error {
 	replicas, updated, ready, available := computeReplicaCounts(newRS, allRSs)
+	desired := desiredReplicas(ro)
 	if ro.Status.Replicas == replicas &&
 		ro.Status.UpdatedReplicas == updated &&
 		ro.Status.ReadyReplicas == ready &&
 		ro.Status.AvailableReplicas == available &&
+		ro.Status.DesiredReplicas == desired &&
 		ro.Status.ObservedGeneration == ro.Generation {
 		return nil
 	}
@@ -295,6 +351,7 @@ func (r *Reconciler) pushReplicaCounts(ctx context.Context, ro *rolloutsv1alpha1
 	patched.Status.UpdatedReplicas = updated
 	patched.Status.ReadyReplicas = ready
 	patched.Status.AvailableReplicas = available
+	patched.Status.DesiredReplicas = desired
 	patched.Status.ObservedGeneration = ro.Generation
 	return r.Client.Status().Update(ctx, patched)
 }

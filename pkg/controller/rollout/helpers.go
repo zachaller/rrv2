@@ -31,6 +31,9 @@ func applyDefaults(ro *rolloutsv1alpha1.Rollout) {
 	if ro.Spec.DynamicStableScale == "" {
 		ro.Spec.DynamicStableScale = rolloutsv1alpha1.DynamicStableScaleOff
 	}
+	if ro.Spec.HPAStrategy == "" {
+		ro.Spec.HPAStrategy = rolloutsv1alpha1.HPAStrategyPreserve
+	}
 	for i := range ro.Spec.Progression.Steps {
 		step := &ro.Spec.Progression.Steps[i]
 		if step.Analysis != nil && step.Analysis.FailurePolicy == "" {

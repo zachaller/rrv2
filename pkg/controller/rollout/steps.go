@@ -28,6 +28,11 @@ import (
 // runSetWeight shifts router traffic, optionally verifies the router observed
 // the new weight, and advances to the next step on success. Requeues the
 // caller when verification is still pending.
+//
+// The post-router-success path also stamps status.CurrentWeight so the next
+// reconcile's reconcileReplicas picks up the new (canary, stable) split. If
+// we advanced before stamping, the reconcile between steps would see a stale
+// weight and scale the wrong way.
 func (e *Executor) runSetWeight(ctx context.Context, ro *rolloutsv1alpha1.Rollout, step rolloutsv1alpha1.Step, idx int) (time.Duration, error) {
 	if e.router == nil {
 		return 0, fmt.Errorf("step %q: setWeight requires spec.trafficRouting", step.Name)
@@ -43,6 +48,14 @@ func (e *Executor) runSetWeight(ctx context.Context, ro *rolloutsv1alpha1.Rollou
 		if !ok {
 			return 2 * time.Second, nil
 		}
+	}
+	if ro.Status.CurrentWeight != step.SetWeight.Weight {
+		patched := ro.DeepCopy()
+		patched.Status.CurrentWeight = step.SetWeight.Weight
+		if err := e.client.Status().Update(ctx, patched); err != nil {
+			return 0, fmt.Errorf("step %q: stamp currentWeight: %w", step.Name, err)
+		}
+		ro.Status.CurrentWeight = step.SetWeight.Weight
 	}
 	return 0, e.advanceStep(ctx, ro, idx)
 }
@@ -475,16 +488,33 @@ func (e *Executor) runPromote(ctx context.Context, ro *rolloutsv1alpha1.Rollout,
 		}
 	}
 
-	// 2. Repoint stable/active Services at the new RS's pod-template-hash.
+	// Stamp CurrentWeight=100 so the next reconcileReplicas shifts all pods
+	// onto the new RS rather than maintaining the pre-promote split.
+	if ro.Status.CurrentWeight != 100 {
+		patched := ro.DeepCopy()
+		patched.Status.CurrentWeight = 100
+		if err := e.client.Status().Update(ctx, patched); err != nil {
+			return 0, fmt.Errorf("step %q: stamp currentWeight=100: %w", step.Name, err)
+		}
+		ro.Status.CurrentWeight = 100
+	}
+
+	// 2. Repoint stableServices at the new RS's pod-template-hash.
 	if newRS != nil {
 		if err := e.repointServices(ctx, ro, newRS); err != nil {
 			return 0, fmt.Errorf("step %q: repoint services: %w", step.Name, err)
 		}
 	}
 
-	// 3. Schedule old-RS scale-down. The forked cleanup (in finalize) and the
-	// scaleDownDelay logic below coexist: we scale down the old RS now if the
-	// delay has elapsed, else requeue.
+	// 3. Schedule old-RS scale-down, guarded against HPA races. If
+	// spec.replicas changed recently and the reconciler hasn't observed
+	// that change yet (status.desiredReplicas / observedGeneration trail
+	// spec.generation), scaling the old RS to zero now could clobber an
+	// HPA-driven scaleup that's still being applied. Wait for the next
+	// reconcile to close that window.
+	if !observedSpecReplicas(ro) {
+		return 2 * time.Second, nil
+	}
 	requeue, err := e.scaleDownAfterDelay(ctx, ro, oldRSs)
 	if err != nil {
 		return 0, fmt.Errorf("step %q: scale down stable: %w", step.Name, err)

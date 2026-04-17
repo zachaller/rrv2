@@ -18,6 +18,7 @@ validation rules; this document explains semantics.
 | `spec.trafficRouting` | `*TrafficRoutingSpec` | — | Router provider and its configuration. |
 | `spec.autoPromotion` | enum | `Enabled` | `Enabled` / `Manual` / `Disabled`. Affects Promote behavior. |
 | `spec.dynamicStableScale` | enum | `Off` | `Off` / `Proportional` / `Aggressive`. Controls whether stable scales down as canary scales up. |
+| `spec.hpaStrategy` | enum | `Preserve` | `Preserve` / `StableOnly` / `Disabled`. How the controller cooperates with an external HPA. See [operations.md](operations.md#autoscaling-hpa-cooperation). |
 | `spec.analysis` | `[]AnalysisHook` | — | Analysis hooks — `preStep`, `postStep`, `background`, `prePromotion`, `postPromotion`. |
 | `spec.ephemeralMetadata` | `[]EphemeralMetadata` | — | Labels/annotations applied to pods while they hold a role. |
 | `spec.restartAt` | `*metav1.Time` | — | Force a rolling pod restart no later than this time. |
@@ -96,6 +97,8 @@ The observed state:
 | `stableRevision` / `currentRevision` | Pod-template-hashes of the previous stable RS and the new one. |
 | `analysisRunSummaries[]` | Compact pointer per completed AnalysisRun. |
 | `replicas` / `updatedReplicas` / `readyReplicas` / `availableReplicas` | Mirrors Deployment counters exactly. |
+| `currentWeight` | Percentage of traffic currently routed to the canary. Updated by SetWeight and Promote. Authoritative input for HPA-aware replica splitting. |
+| `desiredReplicas` | Total replica count most recently honored by the controller. Paired with `observedGeneration` to detect in-flight external scale changes. |
 
 ## AnalysisTemplate / ClusterAnalysisTemplate
 
