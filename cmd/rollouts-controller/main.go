@@ -28,6 +28,8 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	rolloutsv1alpha1 "github.com/zachaller/rrv2/pkg/apis/rollouts/v1alpha1"
+	analysiscontroller "github.com/zachaller/rrv2/pkg/controller/analysis"
+	experimentcontroller "github.com/zachaller/rrv2/pkg/controller/experiment"
 	rolloutcontroller "github.com/zachaller/rrv2/pkg/controller/rollout"
 
 	// Provider registrations — each init() registers its factory with
@@ -85,9 +87,14 @@ func main() {
 		fatalf("create manager: %v", err)
 	}
 
-	reconciler := &rolloutcontroller.Reconciler{}
-	if err := reconciler.SetupWithManager(mgr); err != nil {
+	if err := (&rolloutcontroller.Reconciler{}).SetupWithManager(mgr); err != nil {
 		fatalf("setup rollout controller: %v", err)
+	}
+	if err := (&analysiscontroller.Reconciler{}).SetupWithManager(mgr); err != nil {
+		fatalf("setup analysis controller: %v", err)
+	}
+	if err := (&experimentcontroller.Reconciler{}).SetupWithManager(mgr); err != nil {
+		fatalf("setup experiment controller: %v", err)
 	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {

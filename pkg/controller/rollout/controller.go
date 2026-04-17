@@ -28,7 +28,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/labels"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
@@ -42,6 +42,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	rolloutsv1alpha1 "github.com/zachaller/rrv2/pkg/apis/rollouts/v1alpha1"
+	forked "github.com/zachaller/rrv2/pkg/controller/rollout/_forkedfrom_k8s"
 	"github.com/zachaller/rrv2/pkg/trafficrouting"
 )
 
@@ -55,6 +56,10 @@ type Reconciler struct {
 	// ResolveRouter builds the TrafficRouting plugin for a given Rollout. It
 	// is overridable in tests.
 	ResolveRouter func(ro *rolloutsv1alpha1.Rollout) (trafficrouting.Plugin, error)
+
+	// forked is the stateless adapter around the upstream deployment
+	// controller's reconcile primitives.
+	forked *forked.DeploymentController
 }
 
 // SetupWithManager wires the Reconciler into a controller-runtime Manager:
@@ -75,6 +80,14 @@ func (r *Reconciler) SetupWithManager(mgr manager.Manager) error {
 			return trafficrouting.Resolve(ro, r.Kube, nil)
 		}
 	}
+	if r.Kube == nil {
+		kc, err := kubernetes.NewForConfig(mgr.GetConfig())
+		if err != nil {
+			return fmt.Errorf("build kubernetes clientset: %w", err)
+		}
+		r.Kube = kc
+	}
+	r.forked = forked.NewHeadless(r.Kube, r.Recorder, newClientsetRSLister(r.Kube))
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&rolloutsv1alpha1.Rollout{}).
@@ -138,12 +151,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req reconcile.Request) (reco
 }
 
 // listReplicaSets returns ReplicaSets in the rollout's namespace that match
-// its selector.
+// its selector AND are owned by this Rollout. We filter in two stages because
+// label selectors alone can't disambiguate two Rollouts that happen to share
+// a selector (a configuration error, but one that would otherwise cause the
+// controllers to fight over each other's RSes).
 func (r *Reconciler) listReplicaSets(ctx context.Context, ro *rolloutsv1alpha1.Rollout) ([]*appsv1.ReplicaSet, error) {
 	if ro.Spec.Selector == nil {
 		return nil, fmt.Errorf("rollout %s/%s has no selector", ro.Namespace, ro.Name)
 	}
-	sel, err := labels.Parse(labelSelectorString(ro.Spec.Selector))
+	sel, err := metav1.LabelSelectorAsSelector(ro.Spec.Selector)
 	if err != nil {
 		return nil, fmt.Errorf("parse selector for %s/%s: %w", ro.Namespace, ro.Name, err)
 	}
@@ -171,9 +187,29 @@ func (r *Reconciler) syncRollout(ctx context.Context, ro *rolloutsv1alpha1.Rollo
 		return 0, nil
 	}
 
-	// Handle abort before anything else — skips step progression entirely.
+	// Resolve the router first so abort can unwind traffic.
+	router, err := r.ResolveRouter(ro)
+	if err != nil {
+		return 0, err
+	}
+
+	// Establish the new ReplicaSet. The forked helpers accept a synthetic
+	// Deployment view; we own the real Rollout state and RS ownerReferences
+	// separately.
+	newRS, oldRSs, err := r.reconcileReplicaSets(ctx, ro, rsList)
+	if err != nil {
+		return 0, fmt.Errorf("reconcile replicasets: %w", err)
+	}
+
+	// Push status counters that are safe to compute without the progression's
+	// decisions. Phase transitions are owned by the Executor.
+	if err := r.pushReplicaCounts(ctx, ro, newRS, append(oldRSs, newRS)); err != nil {
+		return 0, fmt.Errorf("push replica counts: %w", err)
+	}
+
+	// Abort path short-circuits progression.
 	if ro.Spec.Abort {
-		return r.abort(ctx, ro, rsList)
+		return r.abort(ctx, ro, router, newRS, oldRSs)
 	}
 
 	// Ensure CurrentStep is set to the first step on first sync.
@@ -190,32 +226,101 @@ func (r *Reconciler) syncRollout(ctx context.Context, ro *rolloutsv1alpha1.Rollo
 		return 0, nil
 	}
 
-	router, err := r.ResolveRouter(ro)
-	if err != nil {
-		return 0, err
-	}
-
 	exec := &Executor{
 		client:   r.Client,
 		kube:     r.Kube,
 		recorder: r.Recorder,
 		router:   router,
+		forked:   r.forked,
 	}
-	return exec.Execute(ctx, ro, rsList)
+	return exec.Execute(ctx, ro, newRS, oldRSs)
 }
 
-// abort tears traffic back to the stable RS and marks the rollout Aborted.
-// ReplicaSets are left as-is — the user (or a follow-up reconcile with abort
-// cleared) scales them to the stable state.
-func (r *Reconciler) abort(ctx context.Context, ro *rolloutsv1alpha1.Rollout, _ []*appsv1.ReplicaSet) (time.Duration, error) {
-	router, err := r.ResolveRouter(ro)
+// reconcileReplicaSets delegates to the forked deployment controller to
+// ensure the canary RS exists with the right pod-template-hash. The Rollout
+// is the parent — we retrofit the ownerReference after the forked helper
+// creates/updates the RS (the helper sets the owner to the synthetic
+// Deployment, which isn't the real object).
+func (r *Reconciler) reconcileReplicaSets(ctx context.Context, ro *rolloutsv1alpha1.Rollout, rsList []*appsv1.ReplicaSet) (newRS *appsv1.ReplicaSet, oldRSs []*appsv1.ReplicaSet, err error) {
+	d := asDeploymentView(ro, &ro.Spec)
+
+	newRS, oldRSs, err = r.forked.GetAllReplicaSetsAndSyncRevision(ctx, d, rsList, true)
 	if err != nil {
-		return 0, err
+		return nil, nil, err
 	}
+
+	// Ensure the RS is owned by the real Rollout, not the synthetic
+	// Deployment the forked helper inserted. Idempotent.
+	if newRS != nil {
+		if err := r.ensureOwnedByRollout(ctx, ro, newRS); err != nil {
+			return nil, nil, err
+		}
+	}
+	return newRS, oldRSs, nil
+}
+
+// ensureOwnedByRollout rewrites a ReplicaSet's controller ownerReference to
+// point at the Rollout. Called once on creation; idempotent on re-sync.
+func (r *Reconciler) ensureOwnedByRollout(ctx context.Context, ro *rolloutsv1alpha1.Rollout, rs *appsv1.ReplicaSet) error {
+	if isOwnedBy(rs, ro) {
+		return nil
+	}
+	isController := true
+	blockOwnerDeletion := true
+	rs.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion:         rolloutsv1alpha1.SchemeGroupVersion.String(),
+		Kind:               "Rollout",
+		Name:               ro.Name,
+		UID:                ro.UID,
+		Controller:         &isController,
+		BlockOwnerDeletion: &blockOwnerDeletion,
+	}}
+	_, err := r.Kube.AppsV1().ReplicaSets(rs.Namespace).Update(ctx, rs, metav1.UpdateOptions{})
+	return err
+}
+
+// pushReplicaCounts computes aggregate replica counters from all RSes and
+// updates status if they changed. No phase transitions happen here.
+func (r *Reconciler) pushReplicaCounts(ctx context.Context, ro *rolloutsv1alpha1.Rollout, newRS *appsv1.ReplicaSet, allRSs []*appsv1.ReplicaSet) error {
+	replicas, updated, ready, available := computeReplicaCounts(newRS, allRSs)
+	if ro.Status.Replicas == replicas &&
+		ro.Status.UpdatedReplicas == updated &&
+		ro.Status.ReadyReplicas == ready &&
+		ro.Status.AvailableReplicas == available &&
+		ro.Status.ObservedGeneration == ro.Generation {
+		return nil
+	}
+	patched := ro.DeepCopy()
+	patched.Status.Replicas = replicas
+	patched.Status.UpdatedReplicas = updated
+	patched.Status.ReadyReplicas = ready
+	patched.Status.AvailableReplicas = available
+	patched.Status.ObservedGeneration = ro.Generation
+	return r.Client.Status().Update(ctx, patched)
+}
+
+// abort tears traffic back to the stable RS, scales the canary RS to zero,
+// and marks the rollout Aborted. Re-setting Abort=false resumes from the
+// current step.
+func (r *Reconciler) abort(ctx context.Context, ro *rolloutsv1alpha1.Rollout, router trafficrouting.Plugin, newRS *appsv1.ReplicaSet, oldRSs []*appsv1.ReplicaSet) (time.Duration, error) {
 	if router != nil {
 		if err := router.SetWeight(ctx, ro, 0); err != nil {
 			return 0, fmt.Errorf("abort: reset weight: %w", err)
 		}
+	}
+
+	// Scale the canary RS (the new revision) to zero while leaving the stable
+	// RSes untouched — operators can re-apply Abort=false to resume.
+	if newRS != nil && newRS.Spec.Replicas != nil && *newRS.Spec.Replicas > 0 {
+		d := asDeploymentView(ro, &ro.Spec)
+		if _, _, err := r.forked.ScaleReplicaSet(ctx, newRS, 0, d, "aborted"); err != nil {
+			return 0, fmt.Errorf("abort: scale canary to 0: %w", err)
+		}
+	}
+	_ = oldRSs // stable RSes are intentionally left at their existing scale
+
+	if ro.Status.Phase == rolloutsv1alpha1.PhaseAborted {
+		return 0, nil
 	}
 	patched := ro.DeepCopy()
 	patched.Status.Phase = rolloutsv1alpha1.PhaseAborted
