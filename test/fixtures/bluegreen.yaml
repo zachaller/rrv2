@@ -1,0 +1,41 @@
+apiVersion: rollouts.io/v1alpha1
+kind: Rollout
+metadata:
+  name: my-app-bg
+  namespace: default
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: my-app-bg
+  template:
+    metadata:
+      labels:
+        app: my-app-bg
+    spec:
+      containers:
+        - name: app
+          image: my-app:v2
+  activeServices:
+    - name: my-app
+  previewServices:
+    - name: my-app-preview
+  autoPromotion: Manual
+  progression:
+    scaleDownDelaySeconds: 60
+    steps:
+      - name: scale-preview
+        setCanaryScale:
+          percent: 100
+          forRole: preview
+      - name: smoke
+        analysis:
+          templateRefs: [{name: smoke-tests}]
+      - name: wait-for-approval
+        pause: {}
+      - name: cutover
+        promote: {}
+      - name: verify
+        analysis:
+          templateRefs: [{name: prod-health}]
+          failurePolicy: Rollback

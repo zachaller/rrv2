@@ -1,0 +1,45 @@
+apiVersion: rollouts.io/v1alpha1
+kind: Rollout
+metadata:
+  name: my-app
+  namespace: default
+spec:
+  replicas: 10
+  selector:
+    matchLabels:
+      app: my-app
+  template:
+    metadata:
+      labels:
+        app: my-app
+    spec:
+      containers:
+        - name: app
+          image: my-app:v2
+          ports:
+            - containerPort: 8080
+  canaryServices:
+    - name: my-app-canary
+  stableServices:
+    - name: my-app
+  trafficRouting:
+    provider: istio
+    istio:
+      virtualServices:
+        - name: my-app
+          routes: [primary]
+  autoPromotion: Enabled
+  progression:
+    steps:
+      - name: canary-25
+        setWeight: {weight: 25}
+      - name: soak
+        pause: {duration: 5m}
+      - name: canary-50
+        setWeight: {weight: 50}
+      - name: perf-gate
+        analysis:
+          templateRefs: [{name: perf}]
+          failurePolicy: Rollback
+      - name: canary-100
+        setWeight: {weight: 100}

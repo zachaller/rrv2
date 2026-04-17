@@ -1,0 +1,75 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: rollouts-controller
+rules:
+  # Rollouts API group — own the rollout lifecycle.
+  - apiGroups: ["rollouts.io"]
+    resources: ["rollouts", "rollouts/status", "rollouts/scale",
+                "analysistemplates", "clusteranalysistemplates",
+                "analysisruns", "analysisruns/status",
+                "experiments", "experiments/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Workload primitives — manage owned ReplicaSets, read Pods/Deployments.
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+
+  # Events + leader election.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Router resources — single cluster role covers every provider we ship;
+  # narrow permissions via a network policy or by editing when deploying a
+  # single provider.
+  - apiGroups: ["networking.istio.io"]
+    resources: ["virtualservices", "destinationrules"]
+    verbs: ["get", "list", "watch", "update", "patch", "create", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "update", "patch", "create", "delete"]
+  - apiGroups: ["split.smi-spec.io"]
+    resources: ["trafficsplits"]
+    verbs: ["get", "list", "watch", "update", "patch", "create", "delete"]
+  - apiGroups: ["traefik.containo.us", "traefik.io"]
+    resources: ["traefikservices"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["apisix.apache.org"]
+    resources: ["apisixroutes"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rollouts-controller
+  namespace: rollouts-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: rollouts-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: rollouts-controller
+subjects:
+  - kind: ServiceAccount
+    name: rollouts-controller
+    namespace: rollouts-system
