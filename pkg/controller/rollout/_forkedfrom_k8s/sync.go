@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package deployment
+package forkeddeployment
 
 import (
 	"context"
@@ -28,9 +28,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
-	"k8s.io/kubernetes/pkg/controller"
-	deploymentutil "k8s.io/kubernetes/pkg/controller/deployment/util"
-	labelsutil "k8s.io/kubernetes/pkg/util/labels"
+	"github.com/zaller/rollouts/pkg/internal/k8scontroller"
+	deploymentutil "github.com/zaller/rollouts/pkg/controller/rollout/_forkedfrom_k8s/util"
+	labelsutil "github.com/zaller/rollouts/pkg/internal/k8slabels"
 )
 
 // syncStatusOnly only updates Deployments Status and doesn't take any mutating actions.
@@ -187,7 +187,7 @@ func (dc *DeploymentController) getNewReplicaSet(ctx context.Context, d *apps.De
 
 	// new ReplicaSet does not exist, create one.
 	newRSTemplate := *d.Spec.Template.DeepCopy()
-	podTemplateSpecHash := controller.ComputeHash(&newRSTemplate, d.Status.CollisionCount)
+	podTemplateSpecHash := k8scontroller.ComputeHash(&newRSTemplate, d.Status.CollisionCount)
 	newRSTemplate.Labels = labelsutil.CloneAndAddLabel(d.Spec.Template.Labels, apps.DefaultDeploymentUniqueLabelKey, podTemplateSpecHash)
 	// Add podTemplateHash label to selector.
 	newRSSelector := labelsutil.CloneSelectorAndAddLabel(d.Spec.Selector, apps.DefaultDeploymentUniqueLabelKey, podTemplateSpecHash)
@@ -310,7 +310,7 @@ func (dc *DeploymentController) scale(ctx context.Context, deployment *apps.Depl
 	// If the new replica set is saturated, old replica sets should be fully scaled down.
 	// This case handles replica set adoption during a saturated new replica set.
 	if deploymentutil.IsSaturated(deployment, newRS) {
-		for _, old := range controller.FilterActiveReplicaSets(oldRSs) {
+		for _, old := range k8scontroller.FilterActiveReplicaSets(oldRSs) {
 			if _, _, err := dc.scaleReplicaSetAndRecordEvent(ctx, old, 0, deployment); err != nil {
 				return err
 			}
@@ -322,7 +322,7 @@ func (dc *DeploymentController) scale(ctx context.Context, deployment *apps.Depl
 	// We need to proportionally scale all replica sets (new and old) in case of a
 	// rolling deployment.
 	if deploymentutil.IsRollingUpdate(deployment) {
-		allRSs := controller.FilterActiveReplicaSets(append(oldRSs, newRS))
+		allRSs := k8scontroller.FilterActiveReplicaSets(append(oldRSs, newRS))
 		allRSsReplicas := deploymentutil.GetReplicaCountForReplicaSets(allRSs)
 
 		allowedSize := int32(0)
@@ -343,11 +343,11 @@ func (dc *DeploymentController) scale(ctx context.Context, deployment *apps.Depl
 		var scalingOperation string
 		switch {
 		case deploymentReplicasToAdd > 0:
-			sort.Sort(controller.ReplicaSetsBySizeNewer(allRSs))
+			sort.Sort(k8scontroller.ReplicaSetsBySizeNewer(allRSs))
 			scalingOperation = "up"
 
 		case deploymentReplicasToAdd < 0:
-			sort.Sort(controller.ReplicaSetsBySizeOlder(allRSs))
+			sort.Sort(k8scontroller.ReplicaSetsBySizeOlder(allRSs))
 			scalingOperation = "down"
 		}
 
@@ -445,7 +445,7 @@ func (dc *DeploymentController) cleanupDeployment(ctx context.Context, oldRSs []
 	aliveFilter := func(rs *apps.ReplicaSet) bool {
 		return rs != nil && rs.ObjectMeta.DeletionTimestamp == nil
 	}
-	cleanableRSes := controller.FilterReplicaSets(oldRSs, aliveFilter)
+	cleanableRSes := k8scontroller.FilterReplicaSets(oldRSs, aliveFilter)
 
 	diff := int32(len(cleanableRSes)) - *deployment.Spec.RevisionHistoryLimit
 	if diff <= 0 {
@@ -536,7 +536,7 @@ func (dc *DeploymentController) isScalingEvent(ctx context.Context, d *apps.Depl
 	}
 	allRSs := append(oldRSs, newRS)
 	logger := klog.FromContext(ctx)
-	for _, rs := range controller.FilterActiveReplicaSets(allRSs) {
+	for _, rs := range k8scontroller.FilterActiveReplicaSets(allRSs) {
 		desired, ok := deploymentutil.GetDesiredReplicasAnnotation(logger, rs)
 		if !ok {
 			continue

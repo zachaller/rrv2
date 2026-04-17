@@ -18,7 +18,7 @@ limitations under the License.
 // It implements a set of strategies (rolling, recreate) for deploying an application,
 // the means to rollback to previous versions, proportional scaling for mitigating
 // risk, cleanup policy, and other useful features of Deployments.
-package deployment
+package forkeddeployment
 
 import (
 	"context"
@@ -45,8 +45,8 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
-	"k8s.io/kubernetes/pkg/controller"
-	"k8s.io/kubernetes/pkg/controller/deployment/util"
+	"github.com/zaller/rollouts/pkg/internal/k8scontroller"
+	"github.com/zaller/rollouts/pkg/controller/rollout/_forkedfrom_k8s/util"
 )
 
 const (
@@ -65,7 +65,7 @@ var controllerKind = apps.SchemeGroupVersion.WithKind("Deployment")
 // in the system with actual running replica sets and pods.
 type DeploymentController struct {
 	// rsControl is used for adopting/releasing replica sets.
-	rsControl controller.RSControlInterface
+	rsControl k8scontroller.RSControlInterface
 	client    clientset.Interface
 
 	eventBroadcaster record.EventBroadcaster
@@ -112,7 +112,7 @@ func NewDeploymentController(ctx context.Context, dInformer appsinformers.Deploy
 			},
 		),
 	}
-	dc.rsControl = controller.RealRSControl{
+	dc.rsControl = k8scontroller.RealRSControl{
 		KubeClient: client,
 		Recorder:   dc.eventRecorder,
 	}
@@ -398,7 +398,7 @@ func (dc *DeploymentController) deletePod(logger klog.Logger, obj interface{}) {
 }
 
 func (dc *DeploymentController) enqueue(deployment *apps.Deployment) {
-	key, err := controller.KeyFunc(deployment)
+	key, err := k8scontroller.KeyFunc(deployment)
 	if err != nil {
 		utilruntime.HandleError(fmt.Errorf("couldn't get key for object %#v: %v", deployment, err))
 		return
@@ -408,7 +408,7 @@ func (dc *DeploymentController) enqueue(deployment *apps.Deployment) {
 }
 
 func (dc *DeploymentController) enqueueRateLimited(deployment *apps.Deployment) {
-	key, err := controller.KeyFunc(deployment)
+	key, err := k8scontroller.KeyFunc(deployment)
 	if err != nil {
 		utilruntime.HandleError(fmt.Errorf("couldn't get key for object %#v: %v", deployment, err))
 		return
@@ -419,7 +419,7 @@ func (dc *DeploymentController) enqueueRateLimited(deployment *apps.Deployment) 
 
 // enqueueAfter will enqueue a deployment after the provided amount of time.
 func (dc *DeploymentController) enqueueAfter(deployment *apps.Deployment, after time.Duration) {
-	key, err := controller.KeyFunc(deployment)
+	key, err := k8scontroller.KeyFunc(deployment)
 	if err != nil {
 		utilruntime.HandleError(fmt.Errorf("couldn't get key for object %#v: %v", deployment, err))
 		return
@@ -535,7 +535,7 @@ func (dc *DeploymentController) getReplicaSetsForDeployment(ctx context.Context,
 	}
 	// If any adoptions are attempted, we should first recheck for deletion with
 	// an uncached quorum read sometime after listing ReplicaSets (see #42639).
-	canAdoptFunc := controller.RecheckDeletionTimestamp(func(ctx context.Context) (metav1.Object, error) {
+	canAdoptFunc := k8scontroller.RecheckDeletionTimestamp(func(ctx context.Context) (metav1.Object, error) {
 		fresh, err := dc.client.AppsV1().Deployments(d.Namespace).Get(ctx, d.Name, metav1.GetOptions{})
 		if err != nil {
 			return nil, err
@@ -545,7 +545,7 @@ func (dc *DeploymentController) getReplicaSetsForDeployment(ctx context.Context,
 		}
 		return fresh, nil
 	})
-	cm := controller.NewReplicaSetControllerRefManager(dc.rsControl, d, deploymentSelector, controllerKind, canAdoptFunc)
+	cm := k8scontroller.NewReplicaSetControllerRefManager(dc.rsControl, d, deploymentSelector, controllerKind, canAdoptFunc)
 	return cm.ClaimReplicaSets(ctx, rsList)
 }
 

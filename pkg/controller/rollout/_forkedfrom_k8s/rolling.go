@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package deployment
+package forkeddeployment
 
 import (
 	"context"
@@ -23,8 +23,8 @@ import (
 
 	apps "k8s.io/api/apps/v1"
 	"k8s.io/klog/v2"
-	"k8s.io/kubernetes/pkg/controller"
-	deploymentutil "k8s.io/kubernetes/pkg/controller/deployment/util"
+	"github.com/zaller/rollouts/pkg/internal/k8scontroller"
+	deploymentutil "github.com/zaller/rollouts/pkg/controller/rollout/_forkedfrom_k8s/util"
 )
 
 // rolloutRolling implements the logic for rolling a new replica set.
@@ -46,7 +46,7 @@ func (dc *DeploymentController) rolloutRolling(ctx context.Context, d *apps.Depl
 	}
 
 	// Scale down, if we can.
-	scaledDown, err := dc.reconcileOldReplicaSets(ctx, allRSs, controller.FilterActiveReplicaSets(oldRSs), newRS, d)
+	scaledDown, err := dc.reconcileOldReplicaSets(ctx, allRSs, k8scontroller.FilterActiveReplicaSets(oldRSs), newRS, d)
 	if err != nil {
 		return err
 	}
@@ -154,7 +154,7 @@ func (dc *DeploymentController) reconcileOldReplicaSets(ctx context.Context, all
 // cleanupUnhealthyReplicas will scale down old replica sets with unhealthy replicas, so that all unhealthy replicas will be deleted.
 func (dc *DeploymentController) cleanupUnhealthyReplicas(ctx context.Context, oldRSs []*apps.ReplicaSet, deployment *apps.Deployment, maxCleanupCount int32) ([]*apps.ReplicaSet, int32, error) {
 	logger := klog.FromContext(ctx)
-	sort.Sort(controller.ReplicaSetsByCreationTimestamp(oldRSs))
+	sort.Sort(k8scontroller.ReplicaSetsByCreationTimestamp(oldRSs))
 	// Safely scale down all old replica sets with unhealthy replicas. Replica set will sort the pods in the order
 	// such that not-ready < ready, unscheduled < scheduled, and pending < running. This ensures that unhealthy replicas will
 	// been deleted first and won't increase unavailability.
@@ -204,7 +204,7 @@ func (dc *DeploymentController) scaleDownOldReplicaSetsForRollingUpdate(ctx cont
 	}
 	logger.V(4).Info("Found available pods in deployment, scaling down old RSes", "deployment", klog.KObj(deployment), "availableReplicas", availablePodCount)
 
-	sort.Sort(controller.ReplicaSetsByCreationTimestamp(oldRSs))
+	sort.Sort(k8scontroller.ReplicaSetsByCreationTimestamp(oldRSs))
 
 	totalScaledDown := int32(0)
 	totalScaleDownCount := availablePodCount - minAvailable

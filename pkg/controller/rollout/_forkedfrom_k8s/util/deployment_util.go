@@ -38,8 +38,8 @@ import (
 	appsclient "k8s.io/client-go/kubernetes/typed/apps/v1"
 	appslisters "k8s.io/client-go/listers/apps/v1"
 	"k8s.io/klog/v2"
-	"k8s.io/kubernetes/pkg/controller"
-	labelsutil "k8s.io/kubernetes/pkg/util/labels"
+	"github.com/zaller/rollouts/pkg/internal/k8scontroller"
+	labelsutil "github.com/zaller/rollouts/pkg/internal/k8slabels"
 	"k8s.io/utils/integer"
 )
 
@@ -359,8 +359,8 @@ func FindActiveOrLatest(newRS *apps.ReplicaSet, oldRSs []*apps.ReplicaSet) *apps
 		return nil
 	}
 
-	sort.Sort(sort.Reverse(controller.ReplicaSetsByCreationTimestamp(oldRSs)))
-	allRSs := controller.FilterActiveReplicaSets(append(oldRSs, newRS))
+	sort.Sort(sort.Reverse(k8scontroller.ReplicaSetsByCreationTimestamp(oldRSs)))
+	allRSs := k8scontroller.FilterActiveReplicaSets(append(oldRSs, newRS))
 
 	switch len(allRSs) {
 	case 0:
@@ -611,7 +611,7 @@ func EqualIgnoreHash(template1, template2 *v1.PodTemplateSpec) bool {
 
 // FindNewReplicaSet returns the new RS this given deployment targets (the one with the same pod template).
 func FindNewReplicaSet(deployment *apps.Deployment, rsList []*apps.ReplicaSet) *apps.ReplicaSet {
-	sort.Sort(controller.ReplicaSetsByCreationTimestamp(rsList))
+	sort.Sort(k8scontroller.ReplicaSetsByCreationTimestamp(rsList))
 	for i := range rsList {
 		if EqualIgnoreHash(&rsList[i].Spec.Template, &deployment.Spec.Template) {
 			// In rare cases, such as after cluster upgrades, Deployment may end up with
@@ -929,7 +929,7 @@ func (o ReplicaSetsByRevision) Less(i, j int) bool {
 	revision1, err1 := Revision(o[i])
 	revision2, err2 := Revision(o[j])
 	if err1 != nil || err2 != nil || revision1 == revision2 {
-		return controller.ReplicaSetsByCreationTimestamp(o).Less(i, j)
+		return k8scontroller.ReplicaSetsByCreationTimestamp(o).Less(i, j)
 	}
 	return revision1 < revision2
 }

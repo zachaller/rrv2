@@ -14,15 +14,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package deployment
+package forkeddeployment
 
 import (
 	"context"
 	apps "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/kubernetes/pkg/controller"
-	"k8s.io/kubernetes/pkg/controller/deployment/util"
+	"github.com/zaller/rollouts/pkg/internal/k8scontroller"
+	"github.com/zaller/rollouts/pkg/controller/rollout/_forkedfrom_k8s/util"
 )
 
 // rolloutRecreate implements the logic for recreating a replica set.
@@ -33,7 +33,7 @@ func (dc *DeploymentController) rolloutRecreate(ctx context.Context, d *apps.Dep
 		return err
 	}
 	allRSs := append(oldRSs, newRS)
-	activeOldRSs := controller.FilterActiveReplicaSets(oldRSs)
+	activeOldRSs := k8scontroller.FilterActiveReplicaSets(oldRSs)
 
 	// scale down old replica sets.
 	scaledDown, err := dc.scaleDownOldReplicaSetsForRecreate(ctx, activeOldRSs, d)

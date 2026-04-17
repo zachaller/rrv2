@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package deployment
+package forkeddeployment
 
 import (
 	"context"
@@ -26,7 +26,7 @@ import (
 	extensions "k8s.io/api/extensions/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
-	deploymentutil "k8s.io/kubernetes/pkg/controller/deployment/util"
+	deploymentutil "github.com/zaller/rollouts/pkg/controller/rollout/_forkedfrom_k8s/util"
 )
 
 // rollback the deployment to the specified revision. In any case cleanup the rollback spec.
