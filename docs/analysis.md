@@ -37,33 +37,47 @@ spec:
 
 ## Expression language
 
-`successCondition` and `failureCondition` are evaluated against the
-sampled metric value. The supported grammar is:
+`successCondition` and `failureCondition` are evaluated by
+[expr-lang/expr](https://expr-lang.org/) — a safe, compile-ahead expression
+language with familiar syntax. The sampled metric value is bound to the
+`result` variable; scalars and slices both work.
+
+Common patterns:
 
 ```
-expr     := or
-or       := and ('||' and)*
-and      := cmp ('&&' cmp)*
-cmp      := num (op num)?        op ∈ { <, <=, >, >=, ==, != }
-num      := lit | ref | '(' expr ')'
-ref      := 'result' ('[' int ']')?
-lit      := float
+result >= 0.99                     # scalar success rate above 99%
+result < 0.01                      # failure rate below 1%
+result[0] >= 0.99 && result[1] < 0.5
+result >= 0.95 || result == 1.0
+!(result < 0.5)                    # negation
+result >= 0.5 ? result > 0.9 : result > 0   # ternary
+result in [200, 204, 206]          # set membership
 ```
 
-Examples:
+Collection helpers over multi-sample vectors:
 
-- `result >= 0.99` — scalar success rate above 99%.
-- `result < 0.01` — failure rate below 1%.
-- `result[0] >= 0.99 && result[1] < 0.5` — two-sample vector where the
-  first metric is high and the second is low.
-- `result >= 0.95 || result == 1.0` — alternative branches.
+```
+all(result, {# >= 0.99})           # every sample above 99%
+any(result, {# < 0.1})             # at least one sample below 10%
+none(result, {# < 0})              # no negative samples
+count(result, {# > 0.5}) >= 2      # at least two samples above 50%
+len(result) > 2                    # slice length check
+```
 
-A bare `result` is a truthiness test (non-zero is true).
+Arithmetic is available too — e.g. `result[0] / result[1] > 2` for ratio
+comparisons between named queries.
 
-When both conditions fail to evaluate cleanly (e.g. the sample is a string
-that can't be parsed as a float), the sample is recorded as `Inconclusive`
-and the metric is subject to the configured `InconclusivePolicy` —
-`Abort`, `Pause`, or `Ignore`.
+Strings are parsed into numbers when they look numeric, so Prometheus
+sample values (always returned as strings by the wire format) compare
+directly against numeric literals. A bare `result` is a truthiness test
+— non-zero numbers are true.
+
+When both `successCondition` and `failureCondition` fail to evaluate
+cleanly (compile error, undefined variable, index out of range), the
+sample is recorded as `Inconclusive` and the metric is subject to the
+configured `InconclusivePolicy` — `Abort`, `Pause`, or `Ignore`. See the
+[expr documentation](https://expr-lang.org/docs/language-definition) for
+the full grammar.
 
 ## Metric phases
 

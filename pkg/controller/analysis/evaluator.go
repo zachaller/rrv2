@@ -11,12 +11,13 @@ You may obtain a copy of the License at
 // Package analysis contains the AnalysisRun controller and its metric
 // provider + expression-evaluator subsystems.
 //
-// The evaluator is deliberately scoped: it supports exactly the expression
-// shape Argo Rollouts users already write — a single identifier (result or
-// result[N]) compared against a numeric literal, optionally combined with
-// && / || boolean connectives. That's enough to express
-//     result[0] >= 0.99 && result[1] < 0.5
-// without pulling in a dependency on a general-purpose expression language.
+// The evaluator delegates to github.com/expr-lang/expr, a safe expression
+// language with familiar syntax (comparison operators, &&/||, indexing,
+// arithmetic, string ops) and no filesystem/network access.
+//
+// Expressions reference the sampled metric value via the `result` variable.
+// Depending on the provider that was queried, `result` is either a numeric
+// scalar or a slice; indexing (`result[0]`) works against slices.
 package analysis
 
 import (
@@ -24,7 +25,9 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"unicode"
+
+	"github.com/expr-lang/expr"
+	"github.com/expr-lang/expr/vm"
 )
 
 // ExprResult is the outcome of evaluating one expression against a sample.
@@ -35,349 +38,141 @@ const (
 	ExprMatched ExprResult = iota
 	// ExprNotMatched means the expression evaluated to false.
 	ExprNotMatched
-	// ExprError means the expression could not be evaluated (parse, type, or
-	// out-of-range lookup).
+	// ExprError means the expression could not be compiled or evaluated
+	// (syntax, type, or out-of-range lookup).
 	ExprError
 )
 
-// Evaluate runs `expr` against `result`. `result` is either a single numeric
-// value (string or float) or a slice of them; the expression references it
-// as `result` or `result[i]`.
+// Evaluate runs `source` against `result`. `result` is a scalar numeric value
+// (any Go numeric type or a string that parses as float) or a slice of them
+// (e.g. []float64 for a Prometheus multi-sample vector).
 //
-// Empty expression returns ExprNotMatched — the caller is responsible for
+// Empty expression returns ExprNotMatched — callers are responsible for
 // defaulting to "no gate" when both SuccessCondition and FailureCondition
 // are empty.
-func Evaluate(expr string, result any) (ExprResult, error) {
-	if strings.TrimSpace(expr) == "" {
+//
+// The returned bool is derived from the expression's value:
+//
+//   - Booleans are used directly.
+//   - Numerics are truthy when non-zero.
+//   - Everything else is an error.
+func Evaluate(source string, result any) (ExprResult, error) {
+	if strings.TrimSpace(source) == "" {
 		return ExprNotMatched, nil
 	}
-	p := &parser{src: expr}
-	v, err := p.parseOr()
+
+	env := buildEnv(result)
+	program, err := compile(source, env)
+	if err != nil {
+		return ExprError, fmt.Errorf("compile %q: %w", source, err)
+	}
+
+	out, err := vm.Run(program, env)
+	if err != nil {
+		return ExprError, fmt.Errorf("eval %q: %w", source, err)
+	}
+
+	matched, err := truthy(out)
 	if err != nil {
 		return ExprError, err
 	}
-	if p.pos < len(p.src) {
-		p.skipSpace()
-		if p.pos < len(p.src) {
-			return ExprError, fmt.Errorf("unexpected trailing input at pos %d: %q", p.pos, p.src[p.pos:])
-		}
-	}
-	b, err := v.boolAt(result)
-	if err != nil {
-		return ExprError, err
-	}
-	if b {
+	if matched {
 		return ExprMatched, nil
 	}
 	return ExprNotMatched, nil
 }
 
-// expr is a single parsed node. Implementations fall into two groups:
-// booleans (whose boolAt returns a logical value) and numerics (whose numAt
-// returns a float). Only the outermost node is asked for a bool.
-type expr interface {
-	boolAt(result any) (bool, error)
+// compile builds an expr program. We pass the env via expr.AsAny() so
+// scalar vs slice bindings are unified under a single runtime shape — expr
+// handles both indexed access (`result[N]`) and scalar access (`result`)
+// over a map[string]any value.
+func compile(source string, env map[string]any) (*vm.Program, error) {
+	return expr.Compile(source, expr.Env(env), expr.AsAny())
 }
 
-type numExpr interface {
-	numAt(result any) (float64, error)
-}
-
-// ---- parser ----
-//
-// Tiny recursive-descent parser. Grammar:
-//     or      := and ('||' and)*
-//     and     := cmp ('&&' cmp)*
-//     cmp     := num (op num)?   where op in {<,<=,>,>=,==,!=}
-//     num     := lit | ref | '(' or ')'
-//     ref     := 'result' ('[' int ']')?
-//     lit     := float
-
-type parser struct {
-	src string
-	pos int
-}
-
-func (p *parser) skipSpace() {
-	for p.pos < len(p.src) && unicode.IsSpace(rune(p.src[p.pos])) {
-		p.pos++
+// buildEnv normalizes `result` into the single shape expr binds to. Scalars
+// are kept as the caller's type; strings are parsed to float64 so numeric
+// comparisons work without the user having to cast; slices of strings are
+// parsed too so the evaluator can index into them directly.
+func buildEnv(result any) map[string]any {
+	return map[string]any{
+		"result": normalizeResult(result),
 	}
 }
 
-func (p *parser) consume(s string) bool {
-	p.skipSpace()
-	if strings.HasPrefix(p.src[p.pos:], s) {
-		p.pos += len(s)
-		return true
-	}
-	return false
-}
-
-func (p *parser) parseOr() (expr, error) {
-	left, err := p.parseAnd()
-	if err != nil {
-		return nil, err
-	}
-	for p.consume("||") {
-		right, err := p.parseAnd()
-		if err != nil {
-			return nil, err
-		}
-		left = &boolOp{op: "||", l: left, r: right}
-	}
-	return left, nil
-}
-
-func (p *parser) parseAnd() (expr, error) {
-	left, err := p.parseCmp()
-	if err != nil {
-		return nil, err
-	}
-	for p.consume("&&") {
-		right, err := p.parseCmp()
-		if err != nil {
-			return nil, err
-		}
-		left = &boolOp{op: "&&", l: left, r: right}
-	}
-	return left, nil
-}
-
-func (p *parser) parseCmp() (expr, error) {
-	left, err := p.parseNum()
-	if err != nil {
-		return nil, err
-	}
-	p.skipSpace()
-	for _, op := range []string{"<=", ">=", "==", "!=", "<", ">"} {
-		if p.consume(op) {
-			right, err := p.parseNum()
-			if err != nil {
-				return nil, err
-			}
-			return &cmpOp{op: op, l: left, r: right}, nil
-		}
-	}
-	// Bare numeric is a truthiness test (non-zero == true).
-	return &truthy{n: left}, nil
-}
-
-func (p *parser) parseNum() (numExpr, error) {
-	p.skipSpace()
-	if p.pos >= len(p.src) {
-		return nil, errors.New("unexpected end of input")
-	}
-	if p.src[p.pos] == '(' {
-		p.pos++
-		inner, err := p.parseOr()
-		if err != nil {
-			return nil, err
-		}
-		p.skipSpace()
-		if p.pos >= len(p.src) || p.src[p.pos] != ')' {
-			return nil, errors.New("expected ')'")
-		}
-		p.pos++
-		return &parenNum{inner: inner}, nil
-	}
-	if strings.HasPrefix(p.src[p.pos:], "result") {
-		p.pos += len("result")
-		if p.consume("[") {
-			start := p.pos
-			for p.pos < len(p.src) && p.src[p.pos] >= '0' && p.src[p.pos] <= '9' {
-				p.pos++
-			}
-			if start == p.pos {
-				return nil, errors.New("expected integer index")
-			}
-			idx, _ := strconv.Atoi(p.src[start:p.pos])
-			if !p.consume("]") {
-				return nil, errors.New("expected ']'")
-			}
-			return &ref{indexed: true, index: idx}, nil
-		}
-		return &ref{}, nil
-	}
-	// Numeric literal.
-	start := p.pos
-	for p.pos < len(p.src) {
-		c := p.src[p.pos]
-		if (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E' {
-			p.pos++
-			continue
-		}
-		break
-	}
-	if start == p.pos {
-		return nil, fmt.Errorf("unexpected token at pos %d: %q", p.pos, p.src[p.pos:])
-	}
-	v, err := strconv.ParseFloat(p.src[start:p.pos], 64)
-	if err != nil {
-		return nil, fmt.Errorf("parse number: %w", err)
-	}
-	return &lit{v: v}, nil
-}
-
-// ---- ast nodes ----
-
-type lit struct{ v float64 }
-
-func (l *lit) numAt(any) (float64, error) { return l.v, nil }
-
-type ref struct {
-	indexed bool
-	index   int
-}
-
-func (r *ref) numAt(result any) (float64, error) {
-	if r.indexed {
-		slice, err := toFloatSlice(result)
-		if err != nil {
-			return 0, fmt.Errorf("result[%d]: %w", r.index, err)
-		}
-		if r.index < 0 || r.index >= len(slice) {
-			return 0, fmt.Errorf("result[%d] out of range (len %d)", r.index, len(slice))
-		}
-		return slice[r.index], nil
-	}
-	// Unindexed: if the result is a single value, use it; if it's a slice of
-	// length 1, unwrap; else error.
-	switch v := result.(type) {
-	case []float64:
-		if len(v) != 1 {
-			return 0, fmt.Errorf("`result` used without index on multi-value result (len %d)", len(v))
-		}
-		return v[0], nil
-	case []string:
-		if len(v) != 1 {
-			return 0, fmt.Errorf("`result` used without index on multi-value result (len %d)", len(v))
-		}
-		return strconv.ParseFloat(v[0], 64)
-	}
-	return toFloat(result)
-}
-
-type parenNum struct{ inner expr }
-
-func (p *parenNum) numAt(result any) (float64, error) {
-	b, err := p.inner.boolAt(result)
-	if err != nil {
-		return 0, err
-	}
-	if b {
-		return 1, nil
-	}
-	return 0, nil
-}
-
-type cmpOp struct {
-	op   string
-	l, r numExpr
-}
-
-func (c *cmpOp) boolAt(result any) (bool, error) {
-	lv, err := c.l.numAt(result)
-	if err != nil {
-		return false, err
-	}
-	rv, err := c.r.numAt(result)
-	if err != nil {
-		return false, err
-	}
-	switch c.op {
-	case "<":
-		return lv < rv, nil
-	case "<=":
-		return lv <= rv, nil
-	case ">":
-		return lv > rv, nil
-	case ">=":
-		return lv >= rv, nil
-	case "==":
-		return lv == rv, nil
-	case "!=":
-		return lv != rv, nil
-	}
-	return false, fmt.Errorf("unknown comparison %q", c.op)
-}
-
-type boolOp struct {
-	op   string
-	l, r expr
-}
-
-func (b *boolOp) boolAt(result any) (bool, error) {
-	lv, err := b.l.boolAt(result)
-	if err != nil {
-		return false, err
-	}
-	switch b.op {
-	case "&&":
-		if !lv {
-			return false, nil
-		}
-	case "||":
-		if lv {
-			return true, nil
-		}
-	}
-	return b.r.boolAt(result)
-}
-
-type truthy struct{ n numExpr }
-
-func (t *truthy) boolAt(result any) (bool, error) {
-	v, err := t.n.numAt(result)
-	if err != nil {
-		return false, err
-	}
-	return v != 0, nil
-}
-
-// ---- helpers ----
-
-func toFloat(v any) (float64, error) {
-	switch v := v.(type) {
-	case float64:
-		return v, nil
-	case float32:
-		return float64(v), nil
-	case int:
-		return float64(v), nil
-	case int64:
-		return float64(v), nil
-	case int32:
-		return float64(v), nil
+// normalizeResult converts provider-shaped values into a form expr can
+// compare numerically without the caller having to know the wire type.
+func normalizeResult(v any) any {
+	switch x := v.(type) {
+	case nil:
+		return nil
+	case float64, float32, int, int32, int64, uint, uint32, uint64, bool:
+		return x
 	case string:
-		return strconv.ParseFloat(v, 64)
-	}
-	return 0, fmt.Errorf("cannot convert %T to float64", v)
-}
-
-func toFloatSlice(v any) ([]float64, error) {
-	switch v := v.(type) {
+		f, err := strconv.ParseFloat(x, 64)
+		if err == nil {
+			return f
+		}
+		return x
 	case []float64:
-		return v, nil
+		return x
+	case []int:
+		out := make([]float64, len(x))
+		for i, n := range x {
+			out[i] = float64(n)
+		}
+		return out
 	case []string:
-		out := make([]float64, len(v))
-		for i, s := range v {
+		out := make([]float64, 0, len(x))
+		ok := true
+		for _, s := range x {
 			f, err := strconv.ParseFloat(s, 64)
 			if err != nil {
-				return nil, err
+				ok = false
+				break
 			}
-			out[i] = f
+			out = append(out, f)
 		}
-		return out, nil
+		if ok {
+			return out
+		}
+		// Fallback: hand expr the raw string slice so string comparisons work.
+		return x
 	case []any:
-		out := make([]float64, len(v))
-		for i, x := range v {
-			f, err := toFloat(x)
-			if err != nil {
-				return nil, err
-			}
-			out[i] = f
-		}
-		return out, nil
+		return x
+	default:
+		return x
 	}
-	return nil, fmt.Errorf("cannot iterate %T as slice", v)
+}
+
+// truthy derives the final boolean. We accept booleans directly (the common
+// case — comparison operators always produce bool); numerics are mapped with
+// non-zero == true so bare-expression usage (`result` as a truthiness test)
+// behaves the way Argo Rollouts users expect.
+func truthy(v any) (bool, error) {
+	switch x := v.(type) {
+	case bool:
+		return x, nil
+	case float64:
+		return x != 0, nil
+	case float32:
+		return x != 0, nil
+	case int:
+		return x != 0, nil
+	case int32:
+		return x != 0, nil
+	case int64:
+		return x != 0, nil
+	case uint:
+		return x != 0, nil
+	case uint32:
+		return x != 0, nil
+	case uint64:
+		return x != 0, nil
+	case string:
+		return x != "", nil
+	case nil:
+		return false, nil
+	}
+	return false, errors.New("expression must evaluate to bool or number")
 }
