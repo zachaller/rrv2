@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:argo-rollouts.readthedocs.io)",
+      "WebFetch(domain:argoproj.github.io)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(curl -s \"https://raw.githubusercontent.com/kubernetes/kubernetes/v1.31.9/pkg/controller/deployment/deployment_controller.go\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/kubernetes/kubernetes/v1.31.9/pkg/controller/deployment/sync.go\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/*)"
+    ]
+  }
+}

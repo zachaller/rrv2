@@ -1,0 +1,9 @@
+Rollouts
+Copyright 2026 The Rollouts Authors
+
+This product includes software developed at The Kubernetes Authors
+(https://github.com/kubernetes/kubernetes).
+
+Portions of this software under pkg/controller/rollout/_forkedfrom_k8s/
+are derived from k8s.io/kubernetes/pkg/controller/deployment at tag
+v1.31.9 and are licensed under the Apache License 2.0.
