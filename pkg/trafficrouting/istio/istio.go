@@ -28,8 +28,8 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
-	rolloutsv1alpha1 "github.com/zaller/rollouts/pkg/apis/rollouts/v1alpha1"
-	"github.com/zaller/rollouts/pkg/trafficrouting"
+	rolloutsv1alpha1 "github.com/zachaller/rrv2/pkg/apis/rollouts/v1alpha1"
+	"github.com/zachaller/rrv2/pkg/trafficrouting"
 )
 
 // Type is the discriminator matched against trafficRouting.provider.

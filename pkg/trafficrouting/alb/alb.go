@@ -17,7 +17,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/zaller/rollouts/pkg/trafficrouting"
+	"github.com/zachaller/rrv2/pkg/trafficrouting"
 )
 
 const Type = "alb"

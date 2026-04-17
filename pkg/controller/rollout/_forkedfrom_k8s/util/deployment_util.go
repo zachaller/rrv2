@@ -38,8 +38,8 @@ import (
 	appsclient "k8s.io/client-go/kubernetes/typed/apps/v1"
 	appslisters "k8s.io/client-go/listers/apps/v1"
 	"k8s.io/klog/v2"
-	"github.com/zaller/rollouts/pkg/internal/k8scontroller"
-	labelsutil "github.com/zaller/rollouts/pkg/internal/k8slabels"
+	"github.com/zachaller/rrv2/pkg/internal/k8scontroller"
+	labelsutil "github.com/zachaller/rrv2/pkg/internal/k8slabels"
 	"k8s.io/utils/integer"
 )
 

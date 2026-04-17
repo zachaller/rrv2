@@ -28,9 +28,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
-	"github.com/zaller/rollouts/pkg/internal/k8scontroller"
-	deploymentutil "github.com/zaller/rollouts/pkg/controller/rollout/_forkedfrom_k8s/util"
-	labelsutil "github.com/zaller/rollouts/pkg/internal/k8slabels"
+	"github.com/zachaller/rrv2/pkg/internal/k8scontroller"
+	deploymentutil "github.com/zachaller/rrv2/pkg/controller/rollout/_forkedfrom_k8s/util"
+	labelsutil "github.com/zachaller/rrv2/pkg/internal/k8slabels"
 )
 
 // syncStatusOnly only updates Deployments Status and doesn't take any mutating actions.

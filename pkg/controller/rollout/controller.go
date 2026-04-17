@@ -41,8 +41,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
-	rolloutsv1alpha1 "github.com/zaller/rollouts/pkg/apis/rollouts/v1alpha1"
-	"github.com/zaller/rollouts/pkg/trafficrouting"
+	rolloutsv1alpha1 "github.com/zachaller/rrv2/pkg/apis/rollouts/v1alpha1"
+	"github.com/zachaller/rrv2/pkg/trafficrouting"
 )
 
 // Reconciler reconciles Rollout objects.

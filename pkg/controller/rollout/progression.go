@@ -20,8 +20,8 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	rolloutsv1alpha1 "github.com/zaller/rollouts/pkg/apis/rollouts/v1alpha1"
-	"github.com/zaller/rollouts/pkg/trafficrouting"
+	rolloutsv1alpha1 "github.com/zachaller/rrv2/pkg/apis/rollouts/v1alpha1"
+	"github.com/zachaller/rrv2/pkg/trafficrouting"
 )
 
 // Executor walks a Rollout's progression, one step at a time. Each Execute

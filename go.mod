@@ -1,4 +1,4 @@
-module github.com/zaller/rollouts
+module github.com/zachaller/rrv2
 
 go 1.25.0
 

@@ -27,18 +27,18 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	rolloutsv1alpha1 "github.com/zaller/rollouts/pkg/apis/rollouts/v1alpha1"
-	rolloutcontroller "github.com/zaller/rollouts/pkg/controller/rollout"
+	rolloutsv1alpha1 "github.com/zachaller/rrv2/pkg/apis/rollouts/v1alpha1"
+	rolloutcontroller "github.com/zachaller/rrv2/pkg/controller/rollout"
 
 	// Provider registrations — each init() registers its factory with
 	// trafficrouting.Global. Import order doesn't matter; the controller
 	// resolves by string discriminator at reconcile time.
-	_ "github.com/zaller/rollouts/pkg/trafficrouting/alb"
-	_ "github.com/zaller/rollouts/pkg/trafficrouting/apisix"
-	_ "github.com/zaller/rollouts/pkg/trafficrouting/istio"
-	_ "github.com/zaller/rollouts/pkg/trafficrouting/nginx"
-	_ "github.com/zaller/rollouts/pkg/trafficrouting/smi"
-	_ "github.com/zaller/rollouts/pkg/trafficrouting/traefik"
+	_ "github.com/zachaller/rrv2/pkg/trafficrouting/alb"
+	_ "github.com/zachaller/rrv2/pkg/trafficrouting/apisix"
+	_ "github.com/zachaller/rrv2/pkg/trafficrouting/istio"
+	_ "github.com/zachaller/rrv2/pkg/trafficrouting/nginx"
+	_ "github.com/zachaller/rrv2/pkg/trafficrouting/smi"
+	_ "github.com/zachaller/rrv2/pkg/trafficrouting/traefik"
 )
 
 var scheme = runtime.NewScheme()

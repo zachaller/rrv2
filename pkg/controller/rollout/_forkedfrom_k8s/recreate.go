@@ -21,8 +21,8 @@ import (
 	apps "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"github.com/zaller/rollouts/pkg/internal/k8scontroller"
-	"github.com/zaller/rollouts/pkg/controller/rollout/_forkedfrom_k8s/util"
+	"github.com/zachaller/rrv2/pkg/internal/k8scontroller"
+	"github.com/zachaller/rrv2/pkg/controller/rollout/_forkedfrom_k8s/util"
 )
 
 // rolloutRecreate implements the logic for recreating a replica set.

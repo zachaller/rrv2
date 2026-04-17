@@ -45,8 +45,8 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/klog/v2"
-	"github.com/zaller/rollouts/pkg/internal/k8scontroller"
-	"github.com/zaller/rollouts/pkg/controller/rollout/_forkedfrom_k8s/util"
+	"github.com/zachaller/rrv2/pkg/internal/k8scontroller"
+	"github.com/zachaller/rrv2/pkg/controller/rollout/_forkedfrom_k8s/util"
 )
 
 const (

@@ -23,8 +23,8 @@ import (
 
 	apps "k8s.io/api/apps/v1"
 	"k8s.io/klog/v2"
-	"github.com/zaller/rollouts/pkg/internal/k8scontroller"
-	deploymentutil "github.com/zaller/rollouts/pkg/controller/rollout/_forkedfrom_k8s/util"
+	"github.com/zachaller/rrv2/pkg/internal/k8scontroller"
+	deploymentutil "github.com/zachaller/rrv2/pkg/controller/rollout/_forkedfrom_k8s/util"
 )
 
 // rolloutRolling implements the logic for rolling a new replica set.

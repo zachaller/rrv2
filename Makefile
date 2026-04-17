@@ -1,6 +1,6 @@
 SHELL := /usr/bin/env bash
 GO    ?= go
-PKG   := github.com/zaller/rollouts
+PKG   := github.com/zachaller/rrv2
 BIN   := bin/rollouts-controller
 
 CONTROLLER_GEN ?= $(shell $(GO) env GOPATH)/bin/controller-gen

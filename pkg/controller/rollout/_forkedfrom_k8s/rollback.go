@@ -26,7 +26,7 @@ import (
 	extensions "k8s.io/api/extensions/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
-	deploymentutil "github.com/zaller/rollouts/pkg/controller/rollout/_forkedfrom_k8s/util"
+	deploymentutil "github.com/zachaller/rrv2/pkg/controller/rollout/_forkedfrom_k8s/util"
 )
 
 // rollback the deployment to the specified revision. In any case cleanup the rollback spec.

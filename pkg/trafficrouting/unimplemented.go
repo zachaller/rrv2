@@ -14,7 +14,7 @@ import (
 	"context"
 	"fmt"
 
-	rolloutsv1alpha1 "github.com/zaller/rollouts/pkg/apis/rollouts/v1alpha1"
+	rolloutsv1alpha1 "github.com/zachaller/rrv2/pkg/apis/rollouts/v1alpha1"
 )
 
 // Unimplemented is a convenient zero value for stub providers — every method

@@ -13,7 +13,7 @@ package rollout
 import (
 	appsv1 "k8s.io/api/apps/v1"
 
-	rolloutsv1alpha1 "github.com/zaller/rollouts/pkg/apis/rollouts/v1alpha1"
+	rolloutsv1alpha1 "github.com/zachaller/rrv2/pkg/apis/rollouts/v1alpha1"
 )
 
 // computeReplicaCounts summarizes per-RS replica counts into the aggregate

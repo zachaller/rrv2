@@ -26,7 +26,7 @@ import (
 	"k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
-	"github.com/zaller/rollouts/pkg/controller/rollout/_forkedfrom_k8s/util"
+	"github.com/zachaller/rrv2/pkg/controller/rollout/_forkedfrom_k8s/util"
 )
 
 // syncRolloutStatus updates the status of a deployment during a rollout. There are
