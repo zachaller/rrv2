@@ -42,10 +42,10 @@ spec:
       openAPIV3Schema:
         description: |-
           Rollout is a progressive-delivery workload. It owns ReplicaSets the same way
-          a Deployment does, but rolls them out through an explicit, named sequence of
-          steps (traffic shifts, replica scales, pauses, analyses, experiments, and
-          promotions). Both canary and blue-green strategies are expressed as step
-          sequences — there is no separate mode.
+          a Deployment does, but rolls them out through an explicit, named sequence
+          of steps — traffic shifts, replica scales, pauses, analyses, experiments,
+          and promotions. There is no separate "canary" or "blue-green" mode; both
+          patterns are just different step sequences ending in a Promote.
         properties:
           apiVersion:
             description: |-
@@ -73,24 +73,11 @@ spec:
                   to the stable/active revision. Prefer setting this over annotations or
                   subresources — this is the one canonical abort channel.
                 type: boolean
-              activeServices:
-                description: |-
-                  ActiveServices name the Services that receive production traffic during a
-                  blue-green rollout. Their selectors are flipped at Promote.
-                items:
-                  description: ServiceRef names a Service in the rollout's namespace.
-                  properties:
-                    name:
-                      type: string
-                  required:
-                  - name
-                  type: object
-                type: array
               analysis:
                 description: |-
-                  Analysis hooks fire at defined points in the progression. This single
-                  list subsumes canary/bluegreen pre/post promotion analysis — the When
-                  field distinguishes trigger points.
+                  Analysis hooks fire at defined points in the progression. One unified
+                  list covers pre/post-step gates, background checks, and pre/post-
+                  promotion validation — the When field distinguishes trigger points.
                 items:
                   description: AnalysisHook is a single trigger point for an AnalysisRun.
                   properties:
@@ -224,8 +211,10 @@ spec:
                 type: string
               canaryServices:
                 description: |-
-                  CanaryServices name the Services routed to the canary ReplicaSet during
-                  a canary-style rollout. Plural to allow multiple Services per rollout.
+                  CanaryServices name the Services routed to the progressing ReplicaSet.
+                  The router shifts weight between stableServices and canaryServices as
+                  the progression advances. Use these to expose the canary to smoke
+                  tests, internal traffic, or analysis probes before any SetWeight step.
                 items:
                   description: ServiceRef names a Service in the rollout's namespace.
                   properties:
@@ -252,8 +241,10 @@ spec:
                   changes (e.g. canary becomes stable), the controller removes these
                   labels/annotations without recreating pods.
                 items:
-                  description: EphemeralMetadata applies labels/annotations to pods
-                    while they hold a role.
+                  description: |-
+                    EphemeralMetadata applies labels/annotations to pods while they hold a role.
+                    When the role changes (e.g. canary becomes stable after Promote) the
+                    controller removes these labels without recreating pods.
                   properties:
                     annotations:
                       additionalProperties:
@@ -264,13 +255,13 @@ spec:
                         type: string
                       type: object
                     role:
-                      description: ServiceRole tags a ServiceRef or applies to EphemeralMetadata
-                        / Step ForRole.
+                      description: |-
+                        ServiceRole tags a ServiceRef in EphemeralMetadata. Only two roles exist:
+                        the stable role (production traffic; pod-template-hash flipped at Promote)
+                        and the canary role (the progressing revision).
                       enum:
                       - canary
                       - stable
-                      - active
-                      - preview
                       type: string
                   required:
                   - role
@@ -283,19 +274,6 @@ spec:
               paused:
                 description: Paused halts reconciliation of this Rollout.
                 type: boolean
-              previewServices:
-                description: |-
-                  PreviewServices name the Services that expose the preview ReplicaSet
-                  before promotion.
-                items:
-                  description: ServiceRef names a Service in the rollout's namespace.
-                  properties:
-                    name:
-                      type: string
-                  required:
-                  - name
-                  type: object
-                type: array
               progressDeadlineSeconds:
                 description: |-
                   ProgressDeadlineSeconds is the maximum time a step can make no forward
@@ -322,9 +300,10 @@ spec:
                     x-kubernetes-int-or-string: true
                   scaleDownDelaySeconds:
                     description: |-
-                      ScaleDownDelaySeconds is how long the previous active (bluegreen) or
-                      stable (canary-with-dynamicStableScale) ReplicaSet is retained after a
-                      successful Promote before the controller scales it down. Defaults to 30.
+                      ScaleDownDelaySeconds is how long the previous stable ReplicaSet is
+                      retained after a successful Promote before the controller scales it
+                      down. Keeping the old RS around briefly lets long-lived in-flight
+                      requests drain. Defaults to 30.
                     format: int32
                     type: integer
                   steps:
@@ -9631,8 +9610,9 @@ spec:
                           type: object
                         promote:
                           description: |-
-                            Promote atomically flips active/stable to the current canary/preview RS
-                            and, after ScaleDownDelaySeconds, scales the old one down.
+                            Promote flips the router to 100% canary and repoints stableServices at
+                            the new ReplicaSet. After ScaleDownDelaySeconds the old stable RS is
+                            scaled down.
                           type: object
                         setCanaryScale:
                           description: |-
@@ -9640,14 +9620,6 @@ spec:
                             independent of traffic weight — useful for warmup, latency soak, or
                             matching traffic weight when the router lacks weight support.
                           properties:
-                            forRole:
-                              default: canary
-                              description: ForRole selects which role's ReplicaSet
-                                is scaled. Defaults to canary.
-                              enum:
-                              - canary
-                              - preview
-                              type: string
                             matchTrafficWeight:
                               description: |-
                                 MatchTrafficWeight pins the canary replica count to track the most recent
@@ -9663,7 +9635,7 @@ spec:
                               x-kubernetes-int-or-string: true
                             replicas:
                               description: Replicas is an absolute replica count for
-                                ForRole's ReplicaSet.
+                                the canary ReplicaSet.
                               format: int32
                               type: integer
                           type: object
@@ -9677,15 +9649,6 @@ spec:
                           description: SetWeight shifts router traffic to (or away
                             from) the canary/preview role.
                           properties:
-                            forRole:
-                              default: canary
-                              description: |-
-                                ForRole selects which role receives Weight percent of traffic.
-                                Defaults to canary.
-                              enum:
-                              - canary
-                              - preview
-                              type: string
                             matches:
                               description: |-
                                 Matches layers header/cookie/query match rules on top of weight routing,
@@ -9763,7 +9726,7 @@ spec:
                               type: array
                             weight:
                               description: Weight is the percentage of traffic sent
-                                to ForRole. 0-100.
+                                to the canary. 0-100.
                               format: int32
                               maximum: 100
                               minimum: 0
@@ -9859,8 +9822,10 @@ spec:
                 type: object
                 x-kubernetes-map-type: atomic
               stableServices:
-                description: StableServices name the Services routed to the stable
-                  ReplicaSet.
+                description: |-
+                  StableServices name the Services routed to the stable ReplicaSet —
+                  the ones that receive production traffic. On Promote, their selectors
+                  are flipped at the new ReplicaSet's pod-template-hash.
                 items:
                   description: ServiceRef names a Service in the rollout's namespace.
                   properties:
@@ -18794,7 +18759,7 @@ spec:
                       - UserRequested
                       - AnalysisInconclusive
                       - AnalysisFailed
-                      - BlueGreenAutoPromotionDisabled
+                      - AwaitingPromotion
                       type: string
                     startTime:
                       format: date-time

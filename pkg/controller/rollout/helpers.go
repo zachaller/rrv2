@@ -33,12 +33,6 @@ func applyDefaults(ro *rolloutsv1alpha1.Rollout) {
 	}
 	for i := range ro.Spec.Progression.Steps {
 		step := &ro.Spec.Progression.Steps[i]
-		if step.SetWeight != nil && step.SetWeight.ForRole == "" {
-			step.SetWeight.ForRole = rolloutsv1alpha1.ServiceRoleCanary
-		}
-		if step.SetCanaryScale != nil && step.SetCanaryScale.ForRole == "" {
-			step.SetCanaryScale.ForRole = rolloutsv1alpha1.ServiceRoleCanary
-		}
 		if step.Analysis != nil && step.Analysis.FailurePolicy == "" {
 			step.Analysis.FailurePolicy = "Rollback"
 		}

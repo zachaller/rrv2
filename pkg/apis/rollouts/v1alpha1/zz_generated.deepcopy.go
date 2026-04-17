@@ -1522,23 +1522,13 @@ func (in *RolloutSpec) DeepCopyInto(out *RolloutSpec) {
 		*out = new(WorkloadRef)
 		**out = **in
 	}
-	if in.CanaryServices != nil {
-		in, out := &in.CanaryServices, &out.CanaryServices
-		*out = make([]ServiceRef, len(*in))
-		copy(*out, *in)
-	}
 	if in.StableServices != nil {
 		in, out := &in.StableServices, &out.StableServices
 		*out = make([]ServiceRef, len(*in))
 		copy(*out, *in)
 	}
-	if in.ActiveServices != nil {
-		in, out := &in.ActiveServices, &out.ActiveServices
-		*out = make([]ServiceRef, len(*in))
-		copy(*out, *in)
-	}
-	if in.PreviewServices != nil {
-		in, out := &in.PreviewServices, &out.PreviewServices
+	if in.CanaryServices != nil {
+		in, out := &in.CanaryServices, &out.CanaryServices
 		*out = make([]ServiceRef, len(*in))
 		copy(*out, *in)
 	}

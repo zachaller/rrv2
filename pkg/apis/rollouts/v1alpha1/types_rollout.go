@@ -30,10 +30,10 @@ import (
 // +kubebuilder:printcolumn:name=Age,type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Rollout is a progressive-delivery workload. It owns ReplicaSets the same way
-// a Deployment does, but rolls them out through an explicit, named sequence of
-// steps (traffic shifts, replica scales, pauses, analyses, experiments, and
-// promotions). Both canary and blue-green strategies are expressed as step
-// sequences — there is no separate mode.
+// a Deployment does, but rolls them out through an explicit, named sequence
+// of steps — traffic shifts, replica scales, pauses, analyses, experiments,
+// and promotions. There is no separate "canary" or "blue-green" mode; both
+// patterns are just different step sequences ending in a Promote.
 type Rollout struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -69,24 +69,18 @@ type RolloutSpec struct {
 	// +optional
 	WorkloadRef *WorkloadRef `json:"workloadRef,omitempty"`
 
-	// CanaryServices name the Services routed to the canary ReplicaSet during
-	// a canary-style rollout. Plural to allow multiple Services per rollout.
-	// +optional
-	CanaryServices []ServiceRef `json:"canaryServices,omitempty"`
-
-	// StableServices name the Services routed to the stable ReplicaSet.
+	// StableServices name the Services routed to the stable ReplicaSet —
+	// the ones that receive production traffic. On Promote, their selectors
+	// are flipped at the new ReplicaSet's pod-template-hash.
 	// +optional
 	StableServices []ServiceRef `json:"stableServices,omitempty"`
 
-	// ActiveServices name the Services that receive production traffic during a
-	// blue-green rollout. Their selectors are flipped at Promote.
+	// CanaryServices name the Services routed to the progressing ReplicaSet.
+	// The router shifts weight between stableServices and canaryServices as
+	// the progression advances. Use these to expose the canary to smoke
+	// tests, internal traffic, or analysis probes before any SetWeight step.
 	// +optional
-	ActiveServices []ServiceRef `json:"activeServices,omitempty"`
-
-	// PreviewServices name the Services that expose the preview ReplicaSet
-	// before promotion.
-	// +optional
-	PreviewServices []ServiceRef `json:"previewServices,omitempty"`
+	CanaryServices []ServiceRef `json:"canaryServices,omitempty"`
 
 	// Progression is the ordered step plan. Required.
 	Progression ProgressionSpec `json:"progression"`
@@ -110,9 +104,9 @@ type RolloutSpec struct {
 	// +optional
 	DynamicStableScale DynamicStableScaleMode `json:"dynamicStableScale,omitempty"`
 
-	// Analysis hooks fire at defined points in the progression. This single
-	// list subsumes canary/bluegreen pre/post promotion analysis — the When
-	// field distinguishes trigger points.
+	// Analysis hooks fire at defined points in the progression. One unified
+	// list covers pre/post-step gates, background checks, and pre/post-
+	// promotion validation — the When field distinguishes trigger points.
 	// +optional
 	Analysis []AnalysisHook `json:"analysis,omitempty"`
 
@@ -201,9 +195,10 @@ type ProgressionSpec struct {
 	// +optional
 	MaxSurge *intstr.IntOrString `json:"maxSurge,omitempty"`
 
-	// ScaleDownDelaySeconds is how long the previous active (bluegreen) or
-	// stable (canary-with-dynamicStableScale) ReplicaSet is retained after a
-	// successful Promote before the controller scales it down. Defaults to 30.
+	// ScaleDownDelaySeconds is how long the previous stable ReplicaSet is
+	// retained after a successful Promote before the controller scales it
+	// down. Keeping the old RS around briefly lets long-lived in-flight
+	// requests drain. Defaults to 30.
 	// +optional
 	ScaleDownDelaySeconds *int32 `json:"scaleDownDelaySeconds,omitempty"`
 }
@@ -244,25 +239,21 @@ type Step struct {
 	// +optional
 	Experiment *ExperimentStep `json:"experiment,omitempty"`
 
-	// Promote atomically flips active/stable to the current canary/preview RS
-	// and, after ScaleDownDelaySeconds, scales the old one down.
+	// Promote flips the router to 100% canary and repoints stableServices at
+	// the new ReplicaSet. After ScaleDownDelaySeconds the old stable RS is
+	// scaled down.
 	// +optional
 	Promote *PromoteStep `json:"promote,omitempty"`
 }
 
-// SetWeightStep moves router traffic.
+// SetWeightStep moves router traffic from stableServices to canaryServices.
+// The router provider translates Weight into its native shape (Istio
+// VirtualService weights, Nginx canary Ingress annotations, etc.).
 type SetWeightStep struct {
-	// Weight is the percentage of traffic sent to ForRole. 0-100.
+	// Weight is the percentage of traffic sent to the canary. 0-100.
 	// +kubebuilder:validation:Minimum=0
 	// +kubebuilder:validation:Maximum=100
 	Weight int32 `json:"weight"`
-
-	// ForRole selects which role receives Weight percent of traffic.
-	// Defaults to canary.
-	// +kubebuilder:validation:Enum=canary;preview
-	// +kubebuilder:default=canary
-	// +optional
-	ForRole ServiceRole `json:"forRole,omitempty"`
 
 	// Matches layers header/cookie/query match rules on top of weight routing,
 	// when the router supports it (Istio, Nginx, ALB).
@@ -270,12 +261,15 @@ type SetWeightStep struct {
 	Matches []RouteMatch `json:"matches,omitempty"`
 }
 
-// SetCanaryScaleStep adjusts replicas for a role independent of traffic weight.
+// SetCanaryScaleStep adjusts the canary ReplicaSet's replica count independent
+// of router traffic weight. Useful for pre-warming pods before any traffic is
+// shifted, or for forcing a full-size preview for smoke testing.
+//
 // Exactly one of Replicas, Percent, or MatchTrafficWeight must be set.
 //
 // +kubebuilder:validation:XValidation:rule="(has(self.replicas)?1:0) + (has(self.percent)?1:0) + (has(self.matchTrafficWeight) && self.matchTrafficWeight?1:0) == 1",message="exactly one of replicas, percent, or matchTrafficWeight must be set"
 type SetCanaryScaleStep struct {
-	// Replicas is an absolute replica count for ForRole's ReplicaSet.
+	// Replicas is an absolute replica count for the canary ReplicaSet.
 	// +optional
 	Replicas *int32 `json:"replicas,omitempty"`
 
@@ -288,12 +282,6 @@ type SetCanaryScaleStep struct {
 	// SetWeight — a convenient shorthand for matching pod count to traffic %.
 	// +optional
 	MatchTrafficWeight bool `json:"matchTrafficWeight,omitempty"`
-
-	// ForRole selects which role's ReplicaSet is scaled. Defaults to canary.
-	// +kubebuilder:validation:Enum=canary;preview
-	// +kubebuilder:default=canary
-	// +optional
-	ForRole ServiceRole `json:"forRole,omitempty"`
 }
 
 // PauseStep halts progression.
@@ -612,8 +600,10 @@ type RollbackWindow struct {
 }
 
 // EphemeralMetadata applies labels/annotations to pods while they hold a role.
+// When the role changes (e.g. canary becomes stable after Promote) the
+// controller removes these labels without recreating pods.
 type EphemeralMetadata struct {
-	// +kubebuilder:validation:Enum=canary;stable;active;preview
+	// +kubebuilder:validation:Enum=canary;stable
 	Role        ServiceRole       `json:"role"`
 	Labels      map[string]string `json:"labels,omitempty"`
 	Annotations map[string]string `json:"annotations,omitempty"`
@@ -694,7 +684,7 @@ type RolloutStatus struct {
 
 // PauseCondition is a single, typed pause reason.
 type PauseCondition struct {
-	// +kubebuilder:validation:Enum=PausedStep;UserRequested;AnalysisInconclusive;AnalysisFailed;BlueGreenAutoPromotionDisabled
+	// +kubebuilder:validation:Enum=PausedStep;UserRequested;AnalysisInconclusive;AnalysisFailed;AwaitingPromotion
 	Reason string `json:"reason"`
 
 	StartTime metav1.Time `json:"startTime"`
@@ -746,14 +736,14 @@ const (
 	WorkloadScaleDownProgressively WorkloadScaleDownMode = "Progressively"
 )
 
-// ServiceRole tags a ServiceRef or applies to EphemeralMetadata / Step ForRole.
+// ServiceRole tags a ServiceRef in EphemeralMetadata. Only two roles exist:
+// the stable role (production traffic; pod-template-hash flipped at Promote)
+// and the canary role (the progressing revision).
 type ServiceRole string
 
 const (
-	ServiceRoleCanary  ServiceRole = "canary"
-	ServiceRoleStable  ServiceRole = "stable"
-	ServiceRoleActive  ServiceRole = "active"
-	ServiceRolePreview ServiceRole = "preview"
+	ServiceRoleCanary ServiceRole = "canary"
+	ServiceRoleStable ServiceRole = "stable"
 )
 
 // AnalysisWhen is the analysisHook.when enum.
@@ -780,9 +770,13 @@ const (
 
 // Pause reason constants.
 const (
-	PauseReasonPausedStep                       = "PausedStep"
-	PauseReasonUserRequested                    = "UserRequested"
-	PauseReasonAnalysisInconclusive             = "AnalysisInconclusive"
-	PauseReasonAnalysisFailed                   = "AnalysisFailed"
-	PauseReasonBlueGreenAutoPromotionDisabled   = "BlueGreenAutoPromotionDisabled"
+	PauseReasonPausedStep           = "PausedStep"
+	PauseReasonUserRequested        = "UserRequested"
+	PauseReasonAnalysisInconclusive = "AnalysisInconclusive"
+	PauseReasonAnalysisFailed       = "AnalysisFailed"
+	// PauseReasonAwaitingPromotion is emitted at a Promote step when
+	// spec.autoPromotion is Manual and the user has not cleared the pause.
+	// It's not blue-green-specific — any progression that ends in Promote
+	// under Manual mode passes through this reason.
+	PauseReasonAwaitingPromotion = "AwaitingPromotion"
 )

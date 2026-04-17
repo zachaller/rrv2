@@ -449,7 +449,7 @@ func (e *Executor) runPromote(ctx context.Context, ro *rolloutsv1alpha1.Rollout,
 			patched := ro.DeepCopy()
 			patched.Status.Phase = rolloutsv1alpha1.PhasePaused
 			patched.Status.PauseConditions = []rolloutsv1alpha1.PauseCondition{{
-				Reason:    rolloutsv1alpha1.PauseReasonBlueGreenAutoPromotionDisabled,
+				Reason:    rolloutsv1alpha1.PauseReasonAwaitingPromotion,
 				StartTime: metav1Now(),
 				Message:   "awaiting user promotion",
 			}}
@@ -495,20 +495,17 @@ func (e *Executor) runPromote(ctx context.Context, ro *rolloutsv1alpha1.Rollout,
 	return 0, e.advanceStep(ctx, ro, idx)
 }
 
-// repointServices updates each stable/active Service's selector to include
+// repointServices updates each stableServices Service selector to include
 // the new RS's pod-template-hash. This is the moment at which the new
-// revision becomes "the stable one"; until now its traffic arrived via the
-// router's weight rules or the preview-labeled Service.
+// revision becomes "the stable one"; until Promote its traffic arrived via
+// the router's weight rules or the canaryServices selector.
 func (e *Executor) repointServices(ctx context.Context, ro *rolloutsv1alpha1.Rollout, newRS *appsv1.ReplicaSet) error {
 	hash := newRS.Labels["pod-template-hash"]
 	if hash == "" {
 		return fmt.Errorf("new RS %s has no pod-template-hash label", newRS.Name)
 	}
 
-	targets := append([]rolloutsv1alpha1.ServiceRef{}, ro.Spec.StableServices...)
-	targets = append(targets, ro.Spec.ActiveServices...)
-
-	for _, ref := range targets {
+	for _, ref := range ro.Spec.StableServices {
 		svc, err := e.kube.CoreV1().Services(ro.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
 		if err != nil {
 			return fmt.Errorf("get service %s: %w", ref.Name, err)

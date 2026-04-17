@@ -110,7 +110,6 @@ func TestApplyDefaults_Enums(t *testing.T) {
 			Progression: rolloutsv1alpha1.ProgressionSpec{
 				Steps: []rolloutsv1alpha1.Step{
 					{Name: "w", SetWeight: &rolloutsv1alpha1.SetWeightStep{Weight: 50}},
-					{Name: "s", SetCanaryScale: &rolloutsv1alpha1.SetCanaryScaleStep{MatchTrafficWeight: true}},
 					{Name: "a", Analysis: &rolloutsv1alpha1.AnalysisStep{
 						TemplateRefs: []rolloutsv1alpha1.TemplateRef{{Name: "t"}},
 					}},
@@ -128,14 +127,8 @@ func TestApplyDefaults_Enums(t *testing.T) {
 	if ro.Spec.DynamicStableScale != rolloutsv1alpha1.DynamicStableScaleOff {
 		t.Errorf("DynamicStableScale: got %q, want %q", ro.Spec.DynamicStableScale, rolloutsv1alpha1.DynamicStableScaleOff)
 	}
-	if ro.Spec.Progression.Steps[0].SetWeight.ForRole != rolloutsv1alpha1.ServiceRoleCanary {
-		t.Errorf("SetWeight.ForRole: got %q, want canary", ro.Spec.Progression.Steps[0].SetWeight.ForRole)
-	}
-	if ro.Spec.Progression.Steps[1].SetCanaryScale.ForRole != rolloutsv1alpha1.ServiceRoleCanary {
-		t.Errorf("SetCanaryScale.ForRole: got %q, want canary", ro.Spec.Progression.Steps[1].SetCanaryScale.ForRole)
-	}
-	if ro.Spec.Progression.Steps[2].Analysis.FailurePolicy != "Rollback" {
-		t.Errorf("Analysis.FailurePolicy: got %q, want Rollback", ro.Spec.Progression.Steps[2].Analysis.FailurePolicy)
+	if ro.Spec.Progression.Steps[1].Analysis.FailurePolicy != "Rollback" {
+		t.Errorf("Analysis.FailurePolicy: got %q, want Rollback", ro.Spec.Progression.Steps[1].Analysis.FailurePolicy)
 	}
 	if ro.Spec.TrafficRouting.VerifyWeight != "Enabled" {
 		t.Errorf("VerifyWeight: got %q, want Enabled", ro.Spec.TrafficRouting.VerifyWeight)
@@ -151,9 +144,9 @@ func TestApplyDefaults_PreservesExplicitValues(t *testing.T) {
 			DynamicStableScale: rolloutsv1alpha1.DynamicStableScaleAggressive,
 			Progression: rolloutsv1alpha1.ProgressionSpec{
 				Steps: []rolloutsv1alpha1.Step{
-					{Name: "w", SetWeight: &rolloutsv1alpha1.SetWeightStep{
-						Weight:  50,
-						ForRole: rolloutsv1alpha1.ServiceRolePreview,
+					{Name: "a", Analysis: &rolloutsv1alpha1.AnalysisStep{
+						TemplateRefs:  []rolloutsv1alpha1.TemplateRef{{Name: "t"}},
+						FailurePolicy: "Ignore",
 					}},
 				},
 			},
@@ -172,8 +165,8 @@ func TestApplyDefaults_PreservesExplicitValues(t *testing.T) {
 	if ro.Spec.DynamicStableScale != rolloutsv1alpha1.DynamicStableScaleAggressive {
 		t.Errorf("DynamicStableScale was overwritten: got %q", ro.Spec.DynamicStableScale)
 	}
-	if ro.Spec.Progression.Steps[0].SetWeight.ForRole != rolloutsv1alpha1.ServiceRolePreview {
-		t.Errorf("SetWeight.ForRole was overwritten: got %q", ro.Spec.Progression.Steps[0].SetWeight.ForRole)
+	if ro.Spec.Progression.Steps[0].Analysis.FailurePolicy != "Ignore" {
+		t.Errorf("Analysis.FailurePolicy was overwritten: got %q", ro.Spec.Progression.Steps[0].Analysis.FailurePolicy)
 	}
 	if ro.Spec.TrafficRouting.VerifyWeight != "Disabled" {
 		t.Errorf("VerifyWeight was overwritten: got %q", ro.Spec.TrafficRouting.VerifyWeight)

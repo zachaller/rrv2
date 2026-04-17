@@ -82,9 +82,9 @@ versions can land implementation without a CRD change.
 At `promote`, the controller:
 
 1. Sets the router to 100% canary (reusing `SetWeight`).
-2. Rewrites the selector of every `stableServices[]` and `activeServices[]`
-   to pin them at the new ReplicaSet's `pod-template-hash`. Existing
-   selector keys are preserved.
+2. Rewrites the selector of every `stableServices[]` Service to pin it at
+   the new ReplicaSet's `pod-template-hash`. Existing selector keys are
+   preserved.
 3. Waits `progression.scaleDownDelaySeconds` (default 30s) and then scales
    the previous stable ReplicaSet to zero via the forked scaleReplicaSet
    helper.

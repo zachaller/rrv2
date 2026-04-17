@@ -32,9 +32,9 @@ type Plugin interface {
 	// rolloutsv1alpha1.TrafficRoutingSpec.Provider.
 	Type() string
 
-	// SetWeight shifts `desiredWeight` percent of traffic to the canary role
-	// (or preview, when the rollout is blue-green). Providers that don't accept
-	// inline weights (Traefik, APISIX) mutate their external CRs to match.
+	// SetWeight shifts `desiredWeight` percent of traffic from stableServices
+	// to canaryServices. Providers that don't accept inline weights (Traefik,
+	// APISIX) mutate their external CRs to match.
 	SetWeight(ctx context.Context, ro *rolloutsv1alpha1.Rollout, desiredWeight int32) error
 
 	// SetHeaderRoute installs (or removes, when match is empty) a header/cookie/

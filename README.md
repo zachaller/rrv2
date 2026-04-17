@@ -1,9 +1,12 @@
 # Rollouts
 
 A Kubernetes controller for progressive delivery — a fork of the
-Kubernetes Deployment controller that adds canary, blue-green, analysis
-gates, and traffic shaping via Istio (with stubs for Nginx, ALB, SMI,
-Traefik, and APISIX).
+Kubernetes Deployment controller that adds a step-based progression
+executor, analysis gates, and traffic shaping via Istio (with stubs for
+Nginx, ALB, SMI, Traefik, and APISIX). Canary, blue-green, and hybrid
+flows are all expressed as different step sequences over the same two
+role fields (`stableServices`, `canaryServices`) — there is no separate
+strategy mode.
 
 ## Status
 

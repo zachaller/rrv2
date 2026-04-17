@@ -1,0 +1,44 @@
+# Full-scale cutover rollout: scale the canary to 100% replicas first, gate
+# on smoke + health analyses, then atomically flip production traffic via
+# Promote. This is the shape people used to call "blue-green" in other
+# tools — here it's just a specific step sequence over canaryServices /
+# stableServices.
+apiVersion: rollouts.io/v1alpha1
+kind: Rollout
+metadata:
+  name: my-app-cutover
+  namespace: default
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: my-app-cutover
+  template:
+    metadata:
+      labels:
+        app: my-app-cutover
+    spec:
+      containers:
+        - name: app
+          image: my-app:v2
+  stableServices:
+    - name: my-app          # receives production traffic; selector flipped at Promote
+  canaryServices:
+    - name: my-app-canary   # exposes the progressing RS for smoke/analysis probes
+  autoPromotion: Manual
+  progression:
+    scaleDownDelaySeconds: 60
+    steps:
+      - name: scale-canary
+        setCanaryScale: {percent: 100}   # bring the canary to full capacity without shifting traffic
+      - name: smoke
+        analysis:
+          templateRefs: [{name: smoke-tests}]
+      - name: wait-for-approval
+        pause: {}
+      - name: cutover
+        promote: {}
+      - name: verify
+        analysis:
+          templateRefs: [{name: prod-health}]
+          failurePolicy: Rollback
